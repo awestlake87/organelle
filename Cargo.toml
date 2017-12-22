@@ -5,4 +5,7 @@ authors = ["Andrew J Westlake <kelixes@gmail.com>"]
 
 [dependencies]
 error-chain = "*"
+futures = "*"
+tokio = "*"
+tokio-core = "*"
 uuid = { version = "*", features = ["serde", "v4"] }
