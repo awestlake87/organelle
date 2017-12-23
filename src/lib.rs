@@ -23,6 +23,9 @@ use uuid::Uuid;
 
 /// cortical error
 error_chain! {
+    foreign_links {
+        Io(std::io::Error) #[doc = "glue for io::Error"];
+    }
     errors {
         /// a lobe returned an error when called into
         LobeError {
@@ -34,23 +37,6 @@ error_chain! {
 
 /// handle to a lobe within the cortex
 pub type Handle = Uuid;
-
-/// reactive structure designed perform any work requested by lobes
-///
-/// relays messages between lobes asynchronously, provides lobes with a list
-/// of their inputs and outputs, and exposes a effects system to perform
-/// arbitrary asio work
-///
-/// generic across a Message type M, however it is not limited to this global
-/// type. as long as another message type can convert Into and From M, then it
-/// can be delivered through this structure with absolutely no boilerplate.
-pub struct Cerebrum<M> {
-    core:       reactor::Core,
-    sender:     mpsc::Sender<Protocol<M>>,
-    receiver:   mpsc::Receiver<Protocol<M>>,
-
-    nodes:      HashMap<Handle, Box<Node<M>>>,
-}
 
 /// a set of protocol messages to be relayed throughout the network
 ///
@@ -164,111 +150,14 @@ impl<M> Effector<M> where M: 'static {
     }
 }
 
-impl<M> Cerebrum<M> where M: 'static {
-    /// create a new cortex
-    pub fn new() -> Self {
-        let (queue_tx, queue_rx) = mpsc::channel(100);
 
-        Self {
-            core: reactor::Core::new().unwrap(),
-            sender: queue_tx,
-            receiver: queue_rx,
-
-            nodes: HashMap::new()
-        }
-    }
-
-    /// add a new lobe to the cortex and initialize it
-    ///
-    /// as long as the lobe's message type can convert Into and From the
-    /// cortex's message type, it can be added to the cortex and can
-    /// communicate with any lobes that do the same.
-    pub fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
-        L: Lobe<T> + 'static,
-        M: From<T> + Into<T> + 'static,
-        T: From<M> + Into<M> + 'static,
-    {
-        let mut node = Box::new(LobeWrapper::new(lobe));
-        let handle = Handle::new_v4();
-
-        let sender = self.sender.clone();
-
-        node.update(
-            Protocol::Init(
-                Effector {
-                    handle: handle,
-                    sender: Rc::from(
-                        move |r: &reactor::Handle, msg| r.spawn(
-                             sender.clone().send(msg)
-                                .then(
-                                    |result| match result {
-                                        Ok(_) => Ok(()),
-                                        Err(_) => Ok(())
-                                    }
-                                )
-                        )
-                    ),
-                    reactor: self.core.handle(),
-                }
-            )
-        );
-
-        self.nodes.insert(handle, node);
-
-        handle
-    }
-
-    /// connect input to output and update them accordingly
-    pub fn connect(&mut self, input: Handle, output: Handle) {
-        self.nodes.get_mut(&input).unwrap().update(
-            Protocol::AddOutput(output)
-        );
-        self.nodes.get_mut(&output).unwrap().update(
-            Protocol::AddInput(input)
-        );
-    }
-
-    /// run the cortex until it encounters the Stop command
-    pub fn run(mut self) -> Result<()> {
-        for ref mut node in self.nodes.values_mut() {
-            node.update(Protocol::Start);
-        }
-
-        let mut nodes = self.nodes;
-
-        let stream_future = self.receiver.take_while(
-            |msg| match *msg {
-                Protocol::Stop => {
-                    println!("ended cleanly");
-                    Ok(false)
-                },
-                _ => Ok(true)
-            }
-        ).for_each(
-            move |msg| match msg {
-                Protocol::Payload(src, dest, msg) => {
-                    nodes.get_mut(&dest).unwrap().update(
-                        Protocol::Message(src, msg)
-                    );
-
-                    Ok(())
-                },
-
-                Protocol::Stop => Ok(()),
-
-                _ => unreachable!(),
-            }
-        );
-
-        self.core.run(
-            stream_future
-                .map(|_| ())
-                .map_err(|_| -> Error {
-                    ErrorKind::Msg("whoops!".into()).into()
-                })
-        )?;
-
-        Ok(())
+/// defines an interface for a lobe of any type
+///
+/// generic across the user-defined message to be passed between lobes
+pub trait Lobe<M>: Sized {
+    /// apply any changes to the lobe's state as a result of _msg
+    fn update(self, _msg: Protocol<M>) -> Self {
+        self
     }
 }
 
@@ -299,16 +188,6 @@ impl<L, I, O> Node<O> for LobeWrapper<L, I> where
     }
 }
 
-/// defines an interface for a lobe of any type
-///
-/// generic across the user-defined message to be passed between lobes
-pub trait Lobe<M>: Sized {
-    /// apply any changes to the lobe's state as a result of _msg
-    fn update(self, _msg: Protocol<M>) -> Self {
-        self
-    }
-}
-
 struct CortexNodePool<M> {
     input_hdl:      Handle,
     output_hdl:     Handle,
@@ -319,7 +198,24 @@ struct CortexNodePool<M> {
     misc:           HashMap<Handle, Box<Node<M>>>,
 }
 
-struct Cortex<M> {
+/// a special lobe designed to contain a network of interconnected lobes
+///
+/// the cortex is created with one input lobe and one output lobe. these lobes
+/// are special in that they are the only lobes within the cortex that are
+/// allowed to communicate or connect to the outside world. the input node can
+/// act as an entry point for the network, providing essential external data
+/// while keeping implementation-specific data and lobes hidden. upon receiving
+/// an update, the output node has the opportunity to communicate these updates
+/// with external lobes.
+///
+/// the intent is to allow cortices to be hierarchical and potentially contain
+/// any number of nested lobe networks. in order to do this, the cortex
+/// isolates a group of messages from the larger whole. this is essential for
+/// extensibility and maintainability.
+///
+/// any cortex can be plugged into any other cortex provided their messages can
+/// convert between each other using From and Into
+pub struct Cortex<M> {
     effector:       Option<Effector<M>>,
 
     input_hdl:      Handle,
@@ -330,7 +226,7 @@ struct Cortex<M> {
 }
 
 impl<M> Cortex<M> {
-    /// create a new cortex
+    /// create a new cortex with input and output lobes
     pub fn new<I, O, IM, OM>(input: I, output: O) -> Self where
         M: From<IM> + Into<IM> + From<OM> + Into<OM> + 'static,
 
@@ -352,16 +248,13 @@ impl<M> Cortex<M> {
 
             nodes: Rc::from(
                 RefCell::new(
-                    CortexNodePool {
+                    CortexNodePool::<M> {
                         input_hdl: input_hdl,
                         output_hdl: output_hdl,
 
-                        input: Box::new(
-                            LobeWrapper(Some(input), PhantomData::default())
-                        ),
-                        output: Box::new(
-                            LobeWrapper(Some(output), PhantomData::default())
-                        ),
+                        input: Box::new(LobeWrapper::new(input)),
+                        output: Box::new(LobeWrapper::new(output)),
+
                         misc: HashMap::new()
                     }
                 )
@@ -375,7 +268,7 @@ impl<M> Cortex<M> {
     /// as long as the lobe's message type can convert Into and From the
     /// cortex's message type, it can be added to the cortex and can
     /// communicate with any lobes that do the same.
-    fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
+    pub fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
         L: Lobe<T> + 'static,
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
@@ -389,17 +282,17 @@ impl<M> Cortex<M> {
     }
 
     /// connect input to output and update them accordingly
-    fn connect(&mut self, input: Handle, output: Handle) {
+    pub fn connect(&mut self, input: Handle, output: Handle) {
         self.connections.push((input, output));
     }
 
     /// get the input lobe's handle
-    fn get_input(&self) -> Handle {
+    pub fn get_input(&self) -> Handle {
         self.input_hdl
     }
 
     /// get the output lobe's handle
-    fn get_output(&self) -> Handle {
+    pub fn get_output(&self) -> Handle {
         self.output_hdl
     }
 
@@ -635,6 +528,94 @@ impl<M> Lobe<M> for Cortex<M> where M: 'static
     }
 }
 
+/// spin up an event loop and run the provided lobe
+pub fn run<T, M>(lobe: T) -> Result<()> where
+    T: Lobe<M>,
+    M: 'static,
+{
+    let (queue_tx, queue_rx) = mpsc::channel(100);
+    let mut core = reactor::Core::new()?;
+
+    let handle = Handle::new_v4();
+    let reactor = core.handle();
+
+    // Rc to keep it alive, RefCell to mutate it in the event loop
+    let mut node = LobeWrapper::new(lobe);
+
+    reactor.clone().spawn(
+        queue_tx.clone()
+            .send(
+                Protocol::Init(
+                    Effector {
+                        handle: handle,
+                        sender: Rc::from(
+                            move |r: &reactor::Handle, msg| r.spawn(
+                                 queue_tx.clone()
+                                    .send(msg)
+                                    .then(|_| Ok(()))
+                            )
+                        ),
+                        reactor: reactor,
+                    }
+                )
+            )
+            .and_then(
+                |tx| tx.send(Protocol::Start)
+                    .then(|_| Ok(()))
+            )
+            .then(|_| Ok(()))
+
+    );
+
+    let stream_future = queue_rx.take_while(
+        |msg| match *msg {
+            Protocol::Stop => {
+                println!("ended cleanly");
+                Ok(false)
+            },
+            _ => Ok(true)
+        }
+    ).for_each(
+        move |msg| {
+            match msg {
+                Protocol::Init(effector) => node.update(
+                    Protocol::Init(effector)
+                ),
+                Protocol::AddInput(input) => node.update(
+                    Protocol::AddInput(input)
+                ),
+                Protocol::AddOutput(output) => node.update(
+                    Protocol::AddOutput(output)
+                ),
+
+                Protocol::Start => node.update(Protocol::Start),
+
+                Protocol::Payload(src, dest, msg) => {
+                    // messages should only be sent to our main lobe
+                    assert_eq!(dest, handle);
+
+                    node.update(Protocol::Message(src, msg));
+                },
+
+                _ => unreachable!(),
+            }
+
+            Ok(())
+        }
+    );
+
+    core.run(
+        stream_future
+            .map(|_| ())
+            .map_err(|_| -> Error {
+                ErrorKind::Msg("whoops!".into()).into()
+            })
+    )?;
+
+    Ok(())
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,10 +780,6 @@ mod tests {
         let output = cortex.get_output();
         cortex.connect(input, output);
 
-        let mut cerebrum = Cerebrum::<IncrementerMessage>::new();
-
-        cerebrum.add_lobe(cortex);
-
-        cerebrum.run().unwrap();
+        run(cortex).unwrap();
     }
 }
