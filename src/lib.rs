@@ -145,6 +145,13 @@ impl<M> Effector<M> where M: 'static {
         self.send_cortex_message(Protocol::Stop);
     }
 
+    /// spawn a future on the reactor
+    pub fn spawn<F>(&self, future: F) where
+        F: Future<Item=(), Error=()> + 'static
+    {
+        self.reactor.spawn(future);
+    }
+
     fn send_cortex_message(&self, msg: Protocol<M>) {
         (*self.sender)(&self.reactor, msg);
     }
