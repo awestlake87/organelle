@@ -121,11 +121,20 @@ impl<M> Protocol<M> {
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
-#[derive(Clone)]
 pub struct Effector<M> {
     handle:     Handle,
     sender:     Rc<Fn(&reactor::Handle, Protocol<M>)>,
     reactor:    reactor::Handle,
+}
+
+impl<M> Clone for Effector<M> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle,
+            sender: Rc::clone(&self.sender),
+            reactor: self.reactor.clone(),
+        }
+    }
 }
 
 impl<M> Effector<M> where M: 'static {
@@ -515,8 +524,7 @@ impl<M> Cortex<M> {
     }
 }
 
-impl<M> Lobe for Cortex<M> where M: 'static
-{
+impl<M> Lobe for Cortex<M> where M: 'static {
     type Message = M;
 
     fn update(self, msg: Protocol<M>) -> Self {
