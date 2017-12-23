@@ -121,6 +121,7 @@ impl<M> Protocol<M> {
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
+#[derive(Clone)]
 pub struct Effector<M> {
     handle:     Handle,
     sender:     Rc<Fn(&reactor::Handle, Protocol<M>)>,
