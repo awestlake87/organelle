@@ -154,9 +154,11 @@ impl<M> Effector<M> where M: 'static {
 /// defines an interface for a lobe of any type
 ///
 /// generic across the user-defined message to be passed between lobes
-pub trait Lobe<M>: Sized {
+pub trait Lobe: Sized {
+    /// user-defined message to be passed between lobes
+    type Message;
     /// apply any changes to the lobe's state as a result of _msg
-    fn update(self, _msg: Protocol<M>) -> Self {
+    fn update(self, _msg: Protocol<Self::Message>) -> Self {
         self
     }
 }
@@ -167,14 +169,14 @@ trait Node<M> {
 
 struct LobeWrapper<L, M>(Option<L>, PhantomData<M>);
 
-impl<L, M> LobeWrapper<L, M> where L: Lobe<M> {
+impl<L, M> LobeWrapper<L, M> where L: Lobe<Message=M> {
     fn new(lobe: L) -> Self {
         LobeWrapper::<L, M>(Some(lobe), PhantomData::default())
     }
 }
 
 impl<L, I, O> Node<O> for LobeWrapper<L, I> where
-    L: Lobe<I>,
+    L: Lobe<Message=I>,
     I: From<O> + Into<O> + 'static,
     O: From<I> + Into<I> + 'static
 {
@@ -230,8 +232,8 @@ impl<M> Cortex<M> {
     pub fn new<I, O, IM, OM>(input: I, output: O) -> Self where
         M: From<IM> + Into<IM> + From<OM> + Into<OM> + 'static,
 
-        I: Lobe<IM> + 'static,
-        O: Lobe<OM> + 'static,
+        I: Lobe<Message=IM> + 'static,
+        O: Lobe<Message=OM> + 'static,
 
         IM: From<M> + Into<M> + 'static,
         OM: From<M> + Into<M> + 'static,
@@ -269,7 +271,7 @@ impl<M> Cortex<M> {
     /// cortex's message type, it can be added to the cortex and can
     /// communicate with any lobes that do the same.
     pub fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
-        L: Lobe<T> + 'static,
+        L: Lobe<Message=T> + 'static,
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
     {
@@ -453,10 +455,10 @@ impl<M> Cortex<M> {
         match msg {
             Protocol::Payload(src, dest, msg) => {
                 let actual_src = {
-                    // check if src is output
-                    if src == nodes.output_hdl {
-                        // if src is output node, then it becomes tricky. the
-                        // output node is allowed to send to both internal and
+                    // check if src is output or input
+                    if src == nodes.output_hdl || src == nodes.input_hdl {
+                        // if src is a special node, then it becomes tricky.
+                        // these are allowed to send to both internal and
                         // external nodes, so the question becomes whether or
                         // not to advertise itself as the node or the cortex
 
@@ -464,8 +466,8 @@ impl<M> Cortex<M> {
                             || dest == nodes.output_hdl
                             || nodes.misc.contains_key(&dest)
                         {
-                            // internal node - use output hdl
-                            nodes.output_hdl
+                            // internal node - use src
+                            src
                         }
                         else {
                             // external node - use cortex hdl
@@ -505,8 +507,10 @@ impl<M> Cortex<M> {
     }
 }
 
-impl<M> Lobe<M> for Cortex<M> where M: 'static
+impl<M> Lobe for Cortex<M> where M: 'static
 {
+    type Message = M;
+
     fn update(self, msg: Protocol<M>) -> Self {
         match msg {
             Protocol::Init(effector) => self.init(effector),
@@ -530,7 +534,7 @@ impl<M> Lobe<M> for Cortex<M> where M: 'static
 
 /// spin up an event loop and run the provided lobe
 pub fn run<T, M>(lobe: T) -> Result<()> where
-    T: Lobe<M>,
+    T: Lobe<Message=M>,
     M: 'static,
 {
     let (queue_tx, queue_rx) = mpsc::channel(100);
@@ -656,11 +660,13 @@ mod tests {
         }
     }
 
-    impl Lobe<IncrementerMessage> for IncrementerLobe {
-        fn update(mut self, msg: Protocol<IncrementerMessage>) -> Self {
+    impl Lobe for IncrementerLobe {
+        type Message = IncrementerMessage;
+
+        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
             match msg {
                 Protocol::Init(effector) => {
-                    println!("incrementer initialized: {}", effector.handle());
+                    println!("incrementer: {}", effector.handle());
                     self.effector = Some(effector);
                 },
                 Protocol::AddOutput(output) => {
@@ -734,11 +740,13 @@ mod tests {
         }
     }
 
-    impl Lobe<CounterMessage> for CounterLobe {
-        fn update(mut self, msg: Protocol<CounterMessage>) -> Self {
+    impl Lobe for CounterLobe {
+        type Message = CounterMessage;
+
+        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
             match msg {
                 Protocol::Init(effector) => {
-                    println!("counter initialized: {}", effector.handle());
+                    println!("counter: {}", effector.handle());
                     self.effector = Some(effector);
                 },
                 Protocol::AddInput(input) => {
@@ -770,6 +778,69 @@ mod tests {
         }
     }
 
+    struct ForwarderLobe {
+        effector: Option<Effector<CounterMessage>>,
+
+        input: Option<Handle>,
+        output: Option<Handle>,
+    }
+
+    impl ForwarderLobe {
+        fn new() -> Self {
+            Self { effector: None, input: None, output: None }
+        }
+
+        fn effector(&self) -> &Effector<CounterMessage> {
+            self.effector.as_ref().unwrap()
+        }
+    }
+
+    impl Lobe for ForwarderLobe {
+        type Message = CounterMessage;
+
+        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
+            match msg {
+                Protocol::Init(effector) => {
+                    println!("forwarder: {}", effector.handle());
+                    self.effector = Some(effector);
+                },
+                Protocol::AddInput(input) => {
+                    println!("forwarder input: {}", input);
+                    self.input = Some(input);
+                },
+                Protocol::AddOutput(output) => {
+                    println!("forwarder output: {}", output);
+                    self.output = Some(output);
+                },
+
+                Protocol::Message(src, msg) => {
+                    if src == self.input.unwrap() {
+                        println!(
+                            "forwarding input {:#?} through {}",
+                            msg,
+                            self.effector().handle()
+                        );
+
+                        self.effector().send(self.output.unwrap(), msg);
+                    }
+                    else if src == self.output.unwrap() {
+                        println!(
+                            "forwarding output {:#?} through {}",
+                            msg,
+                            self.effector().handle()
+                        );
+
+                        self.effector().send(self.input.unwrap(), msg);
+                    }
+                },
+
+                _ => ()
+            }
+
+            self
+        }
+    }
+
     #[test]
     fn test_cortex() {
         let mut cortex = Cortex::<IncrementerMessage>::new(
@@ -781,5 +852,26 @@ mod tests {
         cortex.connect(input, output);
 
         run(cortex).unwrap();
+    }
+
+    #[test]
+    fn test_sub_cortex() {
+        let mut counter_cortex: Cortex<CounterMessage> = Cortex::new(
+            ForwarderLobe::new(), CounterLobe::new()
+        );
+
+        let counter_input = counter_cortex.get_input();
+        let counter_output = counter_cortex.get_output();
+        counter_cortex.connect(counter_input, counter_output);
+
+        let mut inc_cortex: Cortex<IncrementerMessage> = Cortex::new(
+            IncrementerLobe::new(), counter_cortex
+        );
+
+        let inc_input = inc_cortex.get_input();
+        let inc_output = inc_cortex.get_output();
+        inc_cortex.connect(inc_input, inc_output);
+
+        run(inc_cortex).unwrap();
     }
 }
