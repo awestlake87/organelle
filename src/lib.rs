@@ -10,7 +10,9 @@ extern crate tokio;
 extern crate tokio_core;
 extern crate uuid;
 
+use std::cell::{ RefCell };
 use std::collections::{ HashMap };
+use std::marker::PhantomData;
 use std::mem;
 use std::rc::Rc;
 
@@ -42,7 +44,7 @@ pub type Handle = Uuid;
 /// generic across a Message type M, however it is not limited to this global
 /// type. as long as another message type can convert Into and From M, then it
 /// can be delivered through this structure with absolutely no boilerplate.
-pub struct Cortex<M> {
+pub struct Cerebrum<M> {
     core:       reactor::Core,
     sender:     mpsc::Sender<Protocol<M>>,
     receiver:   mpsc::Receiver<Protocol<M>>,
@@ -132,8 +134,7 @@ impl<M> Protocol<M> {
 /// the effector can send a message to any destination, provided you have its
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
-/// found to compose efficient, scalable, and potentially multithreaded
-/// systems.
+/// found to compose efficient, scalable systems.
 pub struct Effector<M> {
     handle:     Handle,
     sender:     Rc<Fn(&reactor::Handle, Protocol<M>)>,
@@ -163,7 +164,7 @@ impl<M> Effector<M> where M: 'static {
     }
 }
 
-impl<M> Cortex<M> where M: 'static {
+impl<M> Cerebrum<M> where M: 'static {
     /// create a new cortex
     pub fn new() -> Self {
         let (queue_tx, queue_rx) = mpsc::channel(100);
@@ -183,7 +184,7 @@ impl<M> Cortex<M> where M: 'static {
     /// cortex's message type, it can be added to the cortex and can
     /// communicate with any lobes that do the same.
     pub fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
-        L: Lobe<Message=T> + 'static,
+        L: Lobe<T> + 'static,
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
     {
@@ -275,16 +276,16 @@ trait Node<M> {
     fn update(&mut self, msg: Protocol<M>);
 }
 
-struct LobeWrapper<L>(Option<L>);
+struct LobeWrapper<L, M>(Option<L>, PhantomData<M>);
 
-impl<L> LobeWrapper<L> {
+impl<L, M> LobeWrapper<L, M> where L: Lobe<M> {
     fn new(lobe: L) -> Self {
-        LobeWrapper::<L>(Some(lobe))
+        LobeWrapper::<L, M>(Some(lobe), PhantomData::default())
     }
 }
 
-impl<L, I, O> Node<O> for LobeWrapper<L> where
-    L: Lobe<Message=I>,
+impl<L, I, O> Node<O> for LobeWrapper<L, I> where
+    L: Lobe<I>,
     I: From<O> + Into<O> + 'static,
     O: From<I> + Into<I> + 'static
 {
@@ -299,13 +300,338 @@ impl<L, I, O> Node<O> for LobeWrapper<L> where
 }
 
 /// defines an interface for a lobe of any type
-pub trait Lobe: Sized {
-    /// the user-defined message to be passed between lobes
-    type Message;
-
+///
+/// generic across the user-defined message to be passed between lobes
+pub trait Lobe<M>: Sized {
     /// apply any changes to the lobe's state as a result of _msg
-    fn update(self, _msg: Protocol<Self::Message>) -> Self {
+    fn update(self, _msg: Protocol<M>) -> Self {
         self
+    }
+}
+
+struct CortexNodePool<M> {
+    input_hdl:      Handle,
+    output_hdl:     Handle,
+
+    input:          Box<Node<M>>,
+    output:         Box<Node<M>>,
+
+    misc:           HashMap<Handle, Box<Node<M>>>,
+}
+
+struct Cortex<M> {
+    effector:       Option<Effector<M>>,
+
+    input_hdl:      Handle,
+    output_hdl:     Handle,
+    connections:    Vec<(Handle, Handle)>,
+
+    nodes:          Rc<RefCell<CortexNodePool<M>>>,
+}
+
+impl<M> Cortex<M> {
+    /// create a new cortex
+    pub fn new<I, O, IM, OM>(input: I, output: O) -> Self where
+        M: From<IM> + Into<IM> + From<OM> + Into<OM> + 'static,
+
+        I: Lobe<IM> + 'static,
+        O: Lobe<OM> + 'static,
+
+        IM: From<M> + Into<M> + 'static,
+        OM: From<M> + Into<M> + 'static,
+    {
+        let input_hdl = Handle::new_v4();
+        let output_hdl = Handle::new_v4();
+
+        Self {
+            effector: None,
+
+            input_hdl: input_hdl,
+            output_hdl: output_hdl,
+            connections: vec![ ],
+
+            nodes: Rc::from(
+                RefCell::new(
+                    CortexNodePool {
+                        input_hdl: input_hdl,
+                        output_hdl: output_hdl,
+
+                        input: Box::new(
+                            LobeWrapper(Some(input), PhantomData::default())
+                        ),
+                        output: Box::new(
+                            LobeWrapper(Some(output), PhantomData::default())
+                        ),
+                        misc: HashMap::new()
+                    }
+                )
+            )
+        }
+    }
+
+
+    /// add a new lobe to the cortex and initialize it
+    ///
+    /// as long as the lobe's message type can convert Into and From the
+    /// cortex's message type, it can be added to the cortex and can
+    /// communicate with any lobes that do the same.
+    fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
+        L: Lobe<T> + 'static,
+        M: From<T> + Into<T> + 'static,
+        T: From<M> + Into<M> + 'static,
+    {
+        let node = Box::new(LobeWrapper::new(lobe));
+        let handle = Handle::new_v4();
+
+        (*self.nodes).borrow_mut().misc.insert(handle, node);
+
+        handle
+    }
+
+    /// connect input to output and update them accordingly
+    fn connect(&mut self, input: Handle, output: Handle) {
+        self.connections.push((input, output));
+    }
+
+    /// get the input lobe's handle
+    fn get_input(&self) -> Handle {
+        self.input_hdl
+    }
+
+    /// get the output lobe's handle
+    fn get_output(&self) -> Handle {
+        self.output_hdl
+    }
+
+    fn update_node(&self, hdl: Handle, msg: Protocol<M>) {
+        let mut nodes = (*self.nodes).borrow_mut();
+
+        if hdl == nodes.input_hdl {
+            nodes.input.update(msg);
+        }
+        else if hdl == nodes.output_hdl {
+            nodes.output.update(msg);
+        }
+        else {
+            nodes.misc.get_mut(&hdl).unwrap().update(msg);
+        }
+    }
+
+    fn init<T>(mut self, effector: Effector<T>) -> Self where
+        M: From<T> + Into<T> + 'static,
+        T: From<M> + Into<M> + 'static,
+    {
+        let cortex_hdl = effector.handle;
+
+        let (queue_tx, queue_rx) = mpsc::channel(100);
+
+        self.effector = Some(
+            Effector {
+                handle: cortex_hdl.clone(),
+                sender: Rc::from(
+                    move |r: &reactor::Handle, msg: Protocol<M>| r.spawn(
+                        queue_tx.clone().send(msg)
+                           .then(
+                               |result| match result {
+                                   Ok(_) => Ok(()),
+                                   Err(_) => Ok(())
+                               }
+                           )
+                    )
+                ),
+                reactor: effector.reactor,
+            }
+        );
+
+        let sender = self.effector
+            .as_ref()
+            .unwrap()
+            .sender
+            .clone()
+        ;
+        let reactor = self.effector
+            .as_ref()
+            .unwrap()
+            .reactor
+            .clone()
+        ;
+
+        let input_hdl = self.input_hdl;
+        let output_hdl = self.output_hdl;
+
+        self.update_node(
+            input_hdl,
+            Protocol::Init(
+                Effector {
+                    handle: input_hdl,
+                    sender: sender.clone(),
+                    reactor: reactor.clone(),
+                }
+            )
+        );
+        self.update_node(
+            output_hdl,
+            Protocol::Init(
+                Effector {
+                    handle: output_hdl,
+                    sender: sender.clone(),
+                    reactor: reactor.clone(),
+                }
+            )
+        );
+
+        for node in (*self.nodes).borrow_mut().misc.values_mut() {
+            node.update(
+                Protocol::Init(
+                    Effector {
+                        handle: Handle::new_v4(),
+                        sender: sender.clone(),
+                        reactor: reactor.clone(),
+                    }
+                )
+            );
+        }
+
+        for &(input, output) in &self.connections {
+            self.update_node(input, Protocol::AddOutput(output));
+            self.update_node(output, Protocol::AddInput(input));
+        }
+
+        let external_sender = effector.sender;
+        let nodes = Rc::clone(&self.nodes);
+        let forward_reactor = reactor.clone();
+
+        let stream_future = queue_rx.for_each(
+            move |msg| {
+                Self::forward(
+                    cortex_hdl,
+                    &mut (*nodes).borrow_mut(),
+                    &*external_sender,
+                    &forward_reactor,
+                    msg
+                );
+
+                Ok(())
+            }
+        );
+
+        reactor.spawn(stream_future);
+
+        self
+    }
+
+    fn start(self) -> Self {
+        {
+            let mut nodes = (*self.nodes).borrow_mut();
+
+            nodes.input.update(Protocol::Start);
+            nodes.output.update(Protocol::Start);
+
+            for node in nodes.misc.values_mut() {
+                node.update(Protocol::Start);
+            }
+        }
+
+        self
+    }
+
+    fn add_input(self, input: Handle) -> Self {
+        (*self.nodes).borrow_mut().input.update(Protocol::AddInput(input));
+
+        self
+    }
+
+    fn add_output(self, output: Handle) -> Self {
+        (*self.nodes).borrow_mut().output.update(Protocol::AddOutput(output));
+
+        self
+    }
+
+    fn forward<T>(
+        cortex: Handle,
+        nodes: &mut CortexNodePool<M>,
+        sender: &Fn(&reactor::Handle, Protocol<T>),
+        reactor: &reactor::Handle,
+        msg: Protocol<M>
+    ) where
+        M: From<T> + Into<T> + 'static,
+        T: From<M> + Into<M> + 'static,
+    {
+        match msg {
+            Protocol::Payload(src, dest, msg) => {
+                let actual_src = {
+                    // check if src is output
+                    if src == nodes.output_hdl {
+                        // if src is output node, then it becomes tricky. the
+                        // output node is allowed to send to both internal and
+                        // external nodes, so the question becomes whether or
+                        // not to advertise itself as the node or the cortex
+
+                        if dest == nodes.input_hdl
+                            || dest == nodes.output_hdl
+                            || nodes.misc.contains_key(&dest)
+                        {
+                            // internal node - use output hdl
+                            nodes.output_hdl
+                        }
+                        else {
+                            // external node - use cortex hdl
+                            cortex
+                        }
+                    }
+                    else {
+                        src
+                    }
+                };
+
+                if dest == nodes.input_hdl {
+                    nodes.input.update(Protocol::Message(actual_src, msg));
+                }
+                else if dest == nodes.output_hdl {
+                    nodes.output.update(Protocol::Message(actual_src, msg));
+                }
+                else if let Some(ref mut node) = nodes.misc.get_mut(&dest) {
+                    // send to internal node
+                    node.update(Protocol::Message(actual_src, msg));
+                }
+                else {
+                    // send to external node
+                    sender(
+                        reactor,
+                        Protocol::<T>::convert_protocol(
+                            Protocol::Payload(actual_src, dest, msg)
+                        )
+                    );
+                }
+            },
+
+            Protocol::Stop => sender(reactor, Protocol::Stop),
+
+            _ => unimplemented!()
+        }
+    }
+}
+
+impl<M> Lobe<M> for Cortex<M> where M: 'static
+{
+    fn update(self, msg: Protocol<M>) -> Self {
+        match msg {
+            Protocol::Init(effector) => self.init(effector),
+            Protocol::AddInput(input) => self.add_input(input),
+            Protocol::AddOutput(output) => self.add_output(output),
+
+            Protocol::Start => self.start(),
+            Protocol::Message(src, msg) => {
+                self.update_node(
+                    self.input_hdl,
+                    Protocol::Message(src, msg)
+                );
+
+                self
+            },
+
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -349,10 +675,8 @@ mod tests {
         }
     }
 
-    impl Lobe for IncrementerLobe {
-        type Message = IncrementerMessage;
-
-        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
+    impl Lobe<IncrementerMessage> for IncrementerLobe {
+        fn update(mut self, msg: Protocol<IncrementerMessage>) -> Self {
             match msg {
                 Protocol::Init(effector) => {
                     println!("incrementer initialized: {}", effector.handle());
@@ -429,10 +753,8 @@ mod tests {
         }
     }
 
-    impl Lobe for CounterLobe {
-        type Message = CounterMessage;
-
-        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
+    impl Lobe<CounterMessage> for CounterLobe {
+        fn update(mut self, msg: Protocol<CounterMessage>) -> Self {
             match msg {
                 Protocol::Init(effector) => {
                     println!("counter initialized: {}", effector.handle());
@@ -469,13 +791,18 @@ mod tests {
 
     #[test]
     fn test_cortex() {
-        let mut cortex = Cortex::<IncrementerMessage>::new();
+        let mut cortex = Cortex::<IncrementerMessage>::new(
+            IncrementerLobe::new(), CounterLobe::new()
+        );
 
-        let lobe1 = cortex.add_lobe(IncrementerLobe::new());
-        let lobe2 = cortex.add_lobe(CounterLobe::new());
+        let input = cortex.get_input();
+        let output = cortex.get_output();
+        cortex.connect(input, output);
 
-        cortex.connect(lobe1, lobe2);
+        let mut cerebrum = Cerebrum::<IncrementerMessage>::new();
 
-        cortex.run().unwrap();
+        cerebrum.add_lobe(cortex);
+
+        cerebrum.run().unwrap();
     }
 }
