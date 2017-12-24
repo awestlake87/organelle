@@ -50,13 +50,13 @@ pub type Handle = Uuid;
 /// 4. any messages sent between lobes will come through Message
 /// 5. when a lobe determines that the cortex should stop, it can issue Stop
 ///     and the cortex will exit its event loop.
-pub enum Protocol<M> {
+pub enum Protocol<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
     /// initializes a lobe with an effector to use
-    Init(Effector<M>),
-    /// notifies lobe that it has an input specified by Handle
-    AddInput(Handle),
-    /// notifies lobe that it has an output specified by Handle
-    AddOutput(Handle),
+    Init(Effector<M, C>),
+    /// add an input Handle with connection constraint
+    AddInput(Handle, C),
+    /// add an output Handle with connection constraint
+    AddOutput(Handle, C),
 
     /// notifies lobe that cortex has begun execution
     Start,
@@ -74,11 +74,17 @@ pub enum Protocol<M> {
     Err(Error),
 }
 
-impl<M> Protocol<M> {
-    fn convert_protocol<T>(msg: Protocol<T>) -> Self
+impl<M, C> Protocol<M, C> where
+    M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static,
+{
+    fn convert_protocol<T, U>(msg: Protocol<T, U>) -> Self
         where
             M: From<T> + Into<T> + 'static,
             T: From<M> + Into<M> + 'static,
+
+            C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq + 'static,
+            U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
     {
         match msg {
             Protocol::Init(effector) => {
@@ -90,9 +96,7 @@ impl<M> Protocol<M> {
                         sender: Rc::from(
                             move |effector: &reactor::Handle, msg| sender(
                                 effector,
-                                Protocol::<T>::convert_protocol(
-                                    msg
-                                )
+                                Protocol::<T, U>::convert_protocol(msg)
                             )
                         ),
                         reactor: effector.reactor,
@@ -100,9 +104,11 @@ impl<M> Protocol<M> {
                 )
             },
 
-            Protocol::AddInput(input) => Protocol::AddInput(input),
-            Protocol::AddOutput(output) => Protocol::AddOutput(
-                output
+            Protocol::AddInput(input, constraint) => Protocol::AddInput(
+                input, constraint.into()
+            ),
+            Protocol::AddOutput(output, constraint) => Protocol::AddOutput(
+                output, constraint.into()
             ),
 
             Protocol::Start => Protocol::Start,
@@ -127,13 +133,16 @@ impl<M> Protocol<M> {
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
-pub struct Effector<M> {
+pub struct Effector<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
     handle:     Handle,
-    sender:     Rc<Fn(&reactor::Handle, Protocol<M>)>,
+    sender:     Rc<Fn(&reactor::Handle, Protocol<M, C>)>,
     reactor:    reactor::Handle,
 }
 
-impl<M> Clone for Effector<M> {
+impl<M, C> Clone for Effector<M, C> where
+    M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static,
+{
     fn clone(&self) -> Self {
         Self {
             handle: self.handle,
@@ -143,7 +152,10 @@ impl<M> Clone for Effector<M> {
     }
 }
 
-impl<M> Effector<M> where M: 'static {
+impl<M, C> Effector<M, C> where
+    M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static,
+{
     /// get the Handle associated with the lobe that owns this effector
     pub fn handle(&self) -> Handle {
         self.handle
@@ -173,7 +185,7 @@ impl<M> Effector<M> where M: 'static {
         self.reactor.spawn(future);
     }
 
-    fn send_cortex_message(&self, msg: Protocol<M>) {
+    fn send_cortex_message(&self, msg: Protocol<M, C>) {
         (*self.sender)(&self.reactor, msg);
     }
 }
@@ -181,38 +193,53 @@ impl<M> Effector<M> where M: 'static {
 
 /// defines an interface for a lobe of any type
 ///
-/// generic across the user-defined message to be passed between lobes
+/// generic across the user-defined message to be passed between lobes and the
+/// user-defined constraints for connections
 pub trait Lobe: Sized {
     /// user-defined message to be passed between lobes
-    type Message;
+    type Message: 'static;
+    /// user-defined constraints for connections
+    type Constraint: Copy + Clone + Eq + PartialEq + 'static;
+
     /// apply any changes to the lobe's state as a result of _msg
-    fn update(self, _msg: Protocol<Self::Message>) -> Result<Self> {
+    fn update(self, _msg: Protocol<Self::Message, Self::Constraint>)
+        -> Result<Self>
+    {
         Ok(self)
     }
 }
 
-trait Node<M> {
-    fn update(&mut self, msg: Protocol<M>) -> Result<()>;
+trait Node<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
+    fn update(&mut self, msg: Protocol<M, C>) -> Result<()>;
 }
 
-struct LobeWrapper<L, M>(Option<L>, PhantomData<M>);
+struct LobeWrapper<L, M, C>(Option<L>, PhantomData<M>, PhantomData<C>);
 
-impl<L, M> LobeWrapper<L, M> where L: Lobe<Message=M> {
+impl<L, M, C> LobeWrapper<L, M, C> where
+    L: Lobe<Message=M, Constraint=C>,
+
+    M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static
+{
     fn new(lobe: L) -> Self {
-        LobeWrapper::<L, M>(Some(lobe), PhantomData::default())
+        LobeWrapper::<L, M, C>(
+            Some(lobe), PhantomData::default(), PhantomData::default()
+        )
     }
 }
 
-impl<L, I, O> Node<O> for LobeWrapper<L, I> where
-    L: Lobe<Message=I>,
-    I: From<O> + Into<O> + 'static,
-    O: From<I> + Into<I> + 'static
+impl<L, IM, OM, IC, OC> Node<OM, OC> for LobeWrapper<L, IM, IC> where
+    L: Lobe<Message=IM, Constraint=IC>,
+    IM: From<OM> + Into<OM> + 'static,
+    OM: From<IM> + Into<IM> + 'static,
+    IC: From<OC> + Into<OC> + Copy + Clone + Eq + PartialEq + 'static,
+    OC: From<IC> + Into<IC> + Copy + Clone + Eq + PartialEq + 'static,
 {
-    fn update(&mut self, msg: Protocol<O>) -> Result<()> {
+    fn update(&mut self, msg: Protocol<OM, OC>) -> Result<()> {
         if self.0.is_some() {
             let lobe = mem::replace(&mut self.0, None)
                 .unwrap()
-                .update(Protocol::<I>::convert_protocol(msg))?
+                .update(Protocol::<IM, IC>::convert_protocol(msg))?
             ;
 
             self.0 = Some(lobe);
@@ -222,14 +249,14 @@ impl<L, I, O> Node<O> for LobeWrapper<L, I> where
     }
 }
 
-struct CortexNodePool<M> {
+struct CortexNodePool<M, C> {
     input_hdl:      Handle,
     output_hdl:     Handle,
 
-    input:          Box<Node<M>>,
-    output:         Box<Node<M>>,
+    input:          Box<Node<M, C>>,
+    output:         Box<Node<M, C>>,
 
-    misc:           HashMap<Handle, Box<Node<M>>>,
+    misc:           HashMap<Handle, Box<Node<M, C>>>,
 }
 
 /// a special lobe designed to contain a network of interconnected lobes
@@ -249,26 +276,33 @@ struct CortexNodePool<M> {
 ///
 /// any cortex can be plugged into any other cortex provided their messages can
 /// convert between each other using From and Into
-pub struct Cortex<M> {
-    effector:       Option<Effector<M>>,
+pub struct Cortex<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
+    effector:       Option<Effector<M, C>>,
 
     input_hdl:      Handle,
     output_hdl:     Handle,
-    connections:    Vec<(Handle, Handle)>,
+    connections:    Vec<(Handle, Handle, C)>,
 
-    nodes:          Rc<RefCell<CortexNodePool<M>>>,
+    nodes:          Rc<RefCell<CortexNodePool<M, C>>>,
 }
 
-impl<M> Cortex<M> {
+impl<M, C> Cortex<M, C> where
+    M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static,
+{
     /// create a new cortex with input and output lobes
-    pub fn new<I, O, IM, OM>(input: I, output: O) -> Self where
+    pub fn new<I, O, IM, OM, IC, OC>(input: I, output: O) -> Self where
         M: From<IM> + Into<IM> + From<OM> + Into<OM> + 'static,
+        C: From<IC> + Into<IC> + From<OC> + Into<OC> + 'static,
 
-        I: Lobe<Message=IM> + 'static,
-        O: Lobe<Message=OM> + 'static,
+        I: Lobe<Message=IM, Constraint=IC> + 'static,
+        O: Lobe<Message=OM, Constraint=OC> + 'static,
 
         IM: From<M> + Into<M> + 'static,
         OM: From<M> + Into<M> + 'static,
+
+        IC: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
+        OC: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
     {
         let input_hdl = Handle::new_v4();
         let output_hdl = Handle::new_v4();
@@ -282,7 +316,7 @@ impl<M> Cortex<M> {
 
             nodes: Rc::from(
                 RefCell::new(
-                    CortexNodePool::<M> {
+                    CortexNodePool::<M, C> {
                         input_hdl: input_hdl,
                         output_hdl: output_hdl,
 
@@ -302,10 +336,14 @@ impl<M> Cortex<M> {
     /// as long as the lobe's message type can convert Into and From the
     /// cortex's message type, it can be added to the cortex and can
     /// communicate with any lobes that do the same.
-    pub fn add_lobe<L, T>(&mut self, lobe: L) -> Handle where
-        L: Lobe<Message=T> + 'static,
+    pub fn add_lobe<L, T, U>(&mut self, lobe: L) -> Handle where
+        L: Lobe<Message=T, Constraint=U> + 'static,
+
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
+
+        C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq + 'static,
+        U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
     {
         let node = Box::new(LobeWrapper::new(lobe));
         let handle = Handle::new_v4();
@@ -316,8 +354,8 @@ impl<M> Cortex<M> {
     }
 
     /// connect input to output and update them accordingly
-    pub fn connect(&mut self, input: Handle, output: Handle) {
-        self.connections.push((input, output));
+    pub fn connect(&mut self, input: Handle, output: Handle, constraint: C) {
+        self.connections.push((input, output, constraint));
     }
 
     /// get the input lobe's handle
@@ -330,7 +368,7 @@ impl<M> Cortex<M> {
         self.output_hdl
     }
 
-    fn update_node(&self, hdl: Handle, msg: Protocol<M>) -> Result<()> {
+    fn update_node(&self, hdl: Handle, msg: Protocol<M, C>) -> Result<()> {
         let mut nodes = (*self.nodes).borrow_mut();
 
         if hdl == nodes.input_hdl {
@@ -344,9 +382,12 @@ impl<M> Cortex<M> {
         }
     }
 
-    fn init<T>(mut self, effector: Effector<T>) -> Result<Self> where
+    fn init<T, U>(mut self, effector: Effector<T, U>) -> Result<Self> where
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
+
+        C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
+        U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq,
     {
         let cortex_hdl = effector.handle;
 
@@ -356,7 +397,7 @@ impl<M> Cortex<M> {
             Effector {
                 handle: cortex_hdl.clone(),
                 sender: Rc::from(
-                    move |r: &reactor::Handle, msg: Protocol<M>| r.spawn(
+                    move |r: &reactor::Handle, msg: Protocol<M, C>| r.spawn(
                         queue_tx.clone().send(msg)
                            .then(
                                |result| match result {
@@ -419,9 +460,9 @@ impl<M> Cortex<M> {
             )?;
         }
 
-        for &(input, output) in &self.connections {
-            self.update_node(input, Protocol::AddOutput(output))?;
-            self.update_node(output, Protocol::AddInput(input))?;
+        for &(input, output, constraint) in &self.connections {
+            self.update_node(input, Protocol::AddOutput(output, constraint))?;
+            self.update_node(output, Protocol::AddInput(input, constraint))?;
         }
 
         let external_sender = effector.sender;
@@ -462,28 +503,35 @@ impl<M> Cortex<M> {
         Ok(self)
     }
 
-    fn add_input(self, input: Handle) -> Result<Self> {
-        (*self.nodes).borrow_mut().input.update(Protocol::AddInput(input))?;
+    fn add_input(self, input: Handle, constraint: C) -> Result<Self> {
+        (*self.nodes).borrow_mut().input.update
+            (Protocol::AddInput(input, constraint)
+        )?;
 
         Ok(self)
     }
 
-    fn add_output(self, output: Handle) -> Result<Self> {
-        (*self.nodes).borrow_mut().output.update(Protocol::AddOutput(output))?;
+    fn add_output(self, output: Handle, constraint: C) -> Result<Self> {
+        (*self.nodes).borrow_mut().output.update(
+            Protocol::AddOutput(output, constraint)
+        )?;
 
         Ok(self)
     }
 
-    fn forward<T>(
+    fn forward<T, U>(
         cortex: Handle,
-        nodes: &mut CortexNodePool<M>,
-        sender: &Fn(&reactor::Handle, Protocol<T>),
+        nodes: &mut CortexNodePool<M, C>,
+        sender: &Fn(&reactor::Handle, Protocol<T, U>),
         reactor: &reactor::Handle,
-        msg: Protocol<M>
+        msg: Protocol<M, C>
     )
         -> Result<()> where
             M: From<T> + Into<T> + 'static,
             T: From<M> + Into<M> + 'static,
+
+            C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
+            U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq,
     {
         match msg {
             Protocol::Payload(src, dest, msg) => {
@@ -526,7 +574,7 @@ impl<M> Cortex<M> {
                     // send to external node
                     sender(
                         reactor,
-                        Protocol::<T>::convert_protocol(
+                        Protocol::<T, U>::convert_protocol(
                             Protocol::Payload(actual_src, dest, msg)
                         )
                     );
@@ -542,14 +590,22 @@ impl<M> Cortex<M> {
     }
 }
 
-impl<M> Lobe for Cortex<M> where M: 'static {
+impl<M, C> Lobe for Cortex<M, C> where
+    M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static,
+{
     type Message = M;
+    type Constraint = C;
 
-    fn update(self, msg: Protocol<M>) -> Result<Self> {
+    fn update(self, msg: Protocol<M, C>) -> Result<Self> {
         match msg {
             Protocol::Init(effector) => self.init(effector),
-            Protocol::AddInput(input) => self.add_input(input),
-            Protocol::AddOutput(output) => self.add_output(output),
+            Protocol::AddInput(input, constraint) => self.add_input(
+                input, constraint
+            ),
+            Protocol::AddOutput(output, constraint) => self.add_output(
+                output, constraint
+            ),
 
             Protocol::Start => self.start(),
             Protocol::Message(src, msg) => {
@@ -567,9 +623,10 @@ impl<M> Lobe for Cortex<M> where M: 'static {
 }
 
 /// spin up an event loop and run the provided lobe
-pub fn run<T, M>(lobe: T) -> Result<()> where
-    T: Lobe<Message=M>,
+pub fn run<T, M, C>(lobe: T) -> Result<()> where
+    T: Lobe<Message=M, Constraint=C>,
     M: 'static,
+    C: Copy + Clone + Eq + PartialEq + 'static,
 {
     let (queue_tx, queue_rx) = mpsc::channel(100);
     let mut core = reactor::Core::new()?;
@@ -578,7 +635,7 @@ pub fn run<T, M>(lobe: T) -> Result<()> where
     let reactor = core.handle();
 
     let sender_tx = queue_tx.clone();
-    let sender: Rc<Fn(&reactor::Handle, Protocol<M>)> = Rc::from(
+    let sender: Rc<Fn(&reactor::Handle, Protocol<M, C>)> = Rc::from(
         move |r: &reactor::Handle, msg| r.spawn(
              sender_tx.clone()
                 .send(msg)
@@ -622,11 +679,11 @@ pub fn run<T, M>(lobe: T) -> Result<()> where
                 Protocol::Init(effector) => node.update(
                     Protocol::Init(effector)
                 ),
-                Protocol::AddInput(input) => node.update(
-                    Protocol::AddInput(input)
+                Protocol::AddInput(input, constraint) => node.update(
+                    Protocol::AddInput(input, constraint)
                 ),
-                Protocol::AddOutput(output) => node.update(
-                    Protocol::AddOutput(output)
+                Protocol::AddOutput(output, constraint) => node.update(
+                    Protocol::AddOutput(output, constraint)
                 ),
 
                 Protocol::Start => node.update(Protocol::Start),
@@ -679,6 +736,21 @@ mod tests {
         Ack,
     }
 
+    #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+    enum IncrementerConstraint {
+        Incrementer,
+        Forwarder,
+        Counter,
+    }
+
+    type IncrementerEffector = Effector<
+        IncrementerMessage, IncrementerConstraint
+    >;
+    type IncrementerProtocol = Protocol<
+        IncrementerMessage, IncrementerConstraint
+    >;
+    type IncrementerCortex = Cortex<IncrementerMessage, IncrementerConstraint>;
+
     impl From<CounterMessage> for IncrementerMessage {
         fn from(msg: CounterMessage) -> IncrementerMessage {
             match msg {
@@ -690,8 +762,23 @@ mod tests {
         }
     }
 
+    impl From<CounterConstraint> for IncrementerConstraint {
+        fn from(c: CounterConstraint) -> IncrementerConstraint {
+            match c {
+                CounterConstraint::Incrementer => {
+                    IncrementerConstraint::Incrementer
+                },
+                CounterConstraint::Forwarder => {
+                    IncrementerConstraint::Forwarder
+                },
+                CounterConstraint::Counter => IncrementerConstraint::Counter,
+                _ => panic!("invalid conversion"),
+            }
+        }
+    }
+
     struct IncrementerLobe {
-        effector: Option<Effector<IncrementerMessage>>,
+        effector: Option<IncrementerEffector>,
 
         output: Option<Handle>,
     }
@@ -704,22 +791,31 @@ mod tests {
             }
         }
 
-        fn effector(&self) -> &Effector<IncrementerMessage> {
+        fn effector(&self) -> &IncrementerEffector {
             self.effector.as_ref().unwrap()
         }
     }
 
     impl Lobe for IncrementerLobe {
         type Message = IncrementerMessage;
+        type Constraint = IncrementerConstraint;
 
-        fn update(mut self, msg: Protocol<Self::Message>) -> Result<Self> {
+        fn update(mut self, msg: IncrementerProtocol) -> Result<Self> {
             match msg {
                 Protocol::Init(effector) => {
                     println!("incrementer: {}", effector.handle());
                     self.effector = Some(effector);
                 },
-                Protocol::AddOutput(output) => {
-                    println!("incrementer output: {}", output);
+                Protocol::AddOutput(output, constraint) => {
+                    println!(
+                        "incrementer output {} {:#?}", output, constraint
+                    );
+
+                    assert!(
+                        constraint == IncrementerConstraint::Incrementer
+                        || constraint == IncrementerConstraint::Forwarder
+                    );
+
                     self.output = Some(output);
                 },
 
@@ -756,6 +852,17 @@ mod tests {
         Ack,
     }
 
+    #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+    enum CounterConstraint {
+        Incrementer,
+        Forwarder,
+        Counter,
+    }
+
+    type CounterEffector = Effector<CounterMessage, CounterConstraint>;
+    type CounterProtocol = Protocol<CounterMessage, CounterConstraint>;
+    type CounterCortex = Cortex<CounterMessage, CounterConstraint>;
+
     impl From<IncrementerMessage> for CounterMessage {
         fn from(msg: IncrementerMessage) -> CounterMessage {
             match msg {
@@ -767,8 +874,24 @@ mod tests {
         }
     }
 
+    impl From<IncrementerConstraint> for CounterConstraint {
+        fn from(constraint: IncrementerConstraint) -> CounterConstraint {
+            match constraint {
+                IncrementerConstraint::Incrementer => {
+                    CounterConstraint::Incrementer
+                },
+                IncrementerConstraint::Forwarder => {
+                    CounterConstraint::Forwarder
+                },
+                IncrementerConstraint::Counter => {
+                    CounterConstraint::Counter
+                },
+            }
+        }
+    }
+
     struct CounterLobe {
-        effector: Option<Effector<CounterMessage>>,
+        effector: Option<CounterEffector>,
 
         input: Option<Handle>,
 
@@ -784,22 +907,29 @@ mod tests {
             }
         }
 
-        fn effector(&self) -> &Effector<CounterMessage> {
+        fn effector(&self) -> &CounterEffector {
             self.effector.as_ref().unwrap()
         }
     }
 
     impl Lobe for CounterLobe {
         type Message = CounterMessage;
+        type Constraint = CounterConstraint;
 
-        fn update(mut self, msg: Protocol<Self::Message>) -> Result<Self> {
+        fn update(mut self, msg: CounterProtocol) -> Result<Self>
+        {
             match msg {
                 Protocol::Init(effector) => {
                     println!("counter: {}", effector.handle());
                     self.effector = Some(effector);
                 },
-                Protocol::AddInput(input) => {
-                    println!("counter input: {}", input);
+                Protocol::AddInput(input, constraint) => {
+                    println!("counter input {} {:#?}", input, constraint);
+
+                    assert!(
+                        constraint == CounterConstraint::Incrementer
+                        || constraint == CounterConstraint::Forwarder
+                    );
                     self.input = Some(input);
                 },
 
@@ -828,7 +958,7 @@ mod tests {
     }
 
     struct ForwarderLobe {
-        effector: Option<Effector<CounterMessage>>,
+        effector: Option<Effector<CounterMessage, CounterConstraint>>,
 
         input: Option<Handle>,
         output: Option<Handle>,
@@ -839,25 +969,38 @@ mod tests {
             Self { effector: None, input: None, output: None }
         }
 
-        fn effector(&self) -> &Effector<CounterMessage> {
+        fn effector(&self) -> &Effector<CounterMessage, CounterConstraint> {
             self.effector.as_ref().unwrap()
         }
     }
 
     impl Lobe for ForwarderLobe {
         type Message = CounterMessage;
+        type Constraint = CounterConstraint;
 
-        fn update(mut self, msg: Protocol<Self::Message>) -> Result<Self> {
+        fn update(mut self, msg: Protocol<Self::Message, Self::Constraint>)
+            -> Result<Self>
+        {
             match msg {
                 Protocol::Init(effector) => {
                     println!("forwarder: {}", effector.handle());
                     self.effector = Some(effector);
                 },
-                Protocol::AddInput(input) => {
+                Protocol::AddInput(input, constraint) => {
+                    assert!(
+                        constraint == CounterConstraint::Incrementer
+                        || constraint == CounterConstraint::Forwarder
+                    );
+
                     println!("forwarder input: {}", input);
                     self.input = Some(input);
                 },
-                Protocol::AddOutput(output) => {
+                Protocol::AddOutput(output, constraint) => {
+                    assert!(
+                        constraint == CounterConstraint::Counter
+                        || constraint == CounterConstraint::Forwarder
+                    );
+
                     println!("forwarder output: {}", output);
                     self.output = Some(output);
                 },
@@ -892,34 +1035,40 @@ mod tests {
 
     #[test]
     fn test_cortex() {
-        let mut cortex = Cortex::<IncrementerMessage>::new(
+        let mut cortex = IncrementerCortex::new(
             IncrementerLobe::new(), CounterLobe::new()
         );
 
         let input = cortex.get_input();
         let output = cortex.get_output();
-        cortex.connect(input, output);
+        cortex.connect(input, output, IncrementerConstraint::Incrementer);
 
         run(cortex).unwrap();
     }
 
     #[test]
     fn test_sub_cortex() {
-        let mut counter_cortex: Cortex<CounterMessage> = Cortex::new(
+        let mut counter_cortex = CounterCortex::new(
             ForwarderLobe::new(), CounterLobe::new()
         );
 
         let counter_input = counter_cortex.get_input();
         let counter_output = counter_cortex.get_output();
-        counter_cortex.connect(counter_input, counter_output);
+        // connect the forwarder to the counter with the Forwarder constraint
+        counter_cortex.connect(
+            counter_input, counter_output, CounterConstraint::Forwarder
+        );
 
-        let mut inc_cortex: Cortex<IncrementerMessage> = Cortex::new(
+        let mut inc_cortex = IncrementerCortex::new(
             IncrementerLobe::new(), counter_cortex
         );
 
         let inc_input = inc_cortex.get_input();
         let inc_output = inc_cortex.get_output();
-        inc_cortex.connect(inc_input, inc_output);
+        // connect the incrementer to the counter cortex
+        inc_cortex.connect(
+            inc_input, inc_output, IncrementerConstraint::Incrementer
+        );
 
         run(inc_cortex).unwrap();
     }
@@ -930,8 +1079,11 @@ mod tests {
 
     impl Lobe for InitErrorLobe {
         type Message = IncrementerMessage;
+        type Constraint = IncrementerConstraint;
 
-        fn update(self, msg: Protocol<Self::Message>) -> Result<Self> {
+        fn update(self, msg: IncrementerProtocol)
+            -> Result<Self>
+        {
             match msg {
                 Protocol::Init(effector) => {
                     effector.error("a lobe error!".into());
@@ -950,8 +1102,11 @@ mod tests {
 
     impl Lobe for UpdateErrorLobe {
         type Message = IncrementerMessage;
+        type Constraint = IncrementerConstraint;
 
-        fn update(self, _: Protocol<Self::Message>) -> Result<Self> {
+        fn update(self, _: IncrementerProtocol)
+            -> Result<Self>
+        {
             bail!("update failed")
         }
     }
@@ -967,7 +1122,7 @@ mod tests {
         }
 
         if let Ok(_) = run(
-            Cortex::<IncrementerMessage>::new(
+            Cortex::<IncrementerMessage, IncrementerConstraint>::new(
                 UpdateErrorLobe { }, UpdateErrorLobe { }
             )
         ) {
