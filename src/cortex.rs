@@ -10,37 +10,33 @@ use tokio_core::reactor;
 use super::{ Result, Protocol, Handle, Effector, Lobe, Node, LobeWrapper };
 
 struct CortexNodePool<M, C> {
-    input_hdl:      Handle,
-    output_hdl:     Handle,
+    main_hdl:       Handle,
 
-    input:          Box<Node<M, C>>,
-    output:         Box<Node<M, C>>,
+    main:           Box<Node<M, C>>,
 
     misc:           HashMap<Handle, Box<Node<M, C>>>,
 }
 
 /// a special lobe designed to contain a network of interconnected lobes
 ///
-/// the cortex is created with one input lobe and one output lobe. these lobes
-/// are special in that they are the only lobes within the cortex that are
-/// allowed to communicate or connect to the outside world. the input node can
-/// act as an entry point for the network, providing essential external data
+/// the cortex is created with one lobe. this lobe is the only lobe within the
+/// cortex that is allowed to communicate or connect to the outside world. it
+/// acts as an entry point for the network, providing essential external data
 /// while keeping implementation-specific data and lobes hidden. upon receiving
-/// an update, the output node has the opportunity to communicate these updates
-/// with external lobes.
+/// an update, it has the opportunity to communicate these updates with
+/// external lobes.
 ///
 /// the intent is to allow cortices to be hierarchical and potentially contain
 /// any number of nested lobe networks. in order to do this, the cortex
 /// isolates a group of messages from the larger whole. this is essential for
 /// extensibility and maintainability.
 ///
-/// any cortex can be plugged into any other cortex provided their messages can
-/// convert between each other using From and Into
+/// any cortex can be plugged into any other cortex provided their messages and
+/// constraints can convert between each other using From and Into
 pub struct Cortex<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
     effector:       Option<Effector<M, C>>,
 
-    input_hdl:      Handle,
-    output_hdl:     Handle,
+    main_hdl:       Handle,
     connections:    Vec<(Handle, Handle, C)>,
 
     nodes:          Rc<RefCell<CortexNodePool<M, C>>>,
@@ -51,37 +47,23 @@ impl<M, C> Cortex<M, C> where
     C: Copy + Clone + Eq + PartialEq + 'static,
 {
     /// create a new cortex with input and output lobes
-    pub fn new<I, O, IM, OM, IC, OC>(input: I, output: O) -> Self where
-        M: From<IM> + Into<IM> + From<OM> + Into<OM> + 'static,
-        C: From<IC> + Into<IC> + From<OC> + Into<OC> + 'static,
-
-        I: Lobe<Message=IM, Constraint=IC> + 'static,
-        O: Lobe<Message=OM, Constraint=OC> + 'static,
-
-        IM: From<M> + Into<M> + 'static,
-        OM: From<M> + Into<M> + 'static,
-
-        IC: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
-        OC: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
+    pub fn new<L>(main: L) -> Self where
+        L: Lobe<Message=M, Constraint=C> + 'static,
     {
-        let input_hdl = Handle::new_v4();
-        let output_hdl = Handle::new_v4();
+        let main_hdl = Handle::new_v4();
 
         Self {
             effector: None,
 
-            input_hdl: input_hdl,
-            output_hdl: output_hdl,
+            main_hdl: main_hdl,
             connections: vec![ ],
 
             nodes: Rc::from(
                 RefCell::new(
                     CortexNodePool::<M, C> {
-                        input_hdl: input_hdl,
-                        output_hdl: output_hdl,
+                        main_hdl: main_hdl,
 
-                        input: Box::new(LobeWrapper::new(input)),
-                        output: Box::new(LobeWrapper::new(output)),
+                        main: Box::new(LobeWrapper::new(main)),
 
                         misc: HashMap::new()
                     }
@@ -119,23 +101,15 @@ impl<M, C> Cortex<M, C> where
     }
 
     /// get the input lobe's handle
-    pub fn get_input(&self) -> Handle {
-        self.input_hdl
-    }
-
-    /// get the output lobe's handle
-    pub fn get_output(&self) -> Handle {
-        self.output_hdl
+    pub fn get_main_handle(&self) -> Handle {
+        self.main_hdl
     }
 
     fn update_node(&self, hdl: Handle, msg: Protocol<M, C>) -> Result<()> {
         let mut nodes = (*self.nodes).borrow_mut();
 
-        if hdl == nodes.input_hdl {
-            nodes.input.update(msg)
-        }
-        else if hdl == nodes.output_hdl {
-            nodes.output.update(msg)
+        if hdl == nodes.main_hdl {
+            nodes.main.update(msg)
         }
         else {
             nodes.misc.get_mut(&hdl).unwrap().update(msg)
@@ -184,35 +158,24 @@ impl<M, C> Cortex<M, C> where
             .clone()
         ;
 
-        let input_hdl = self.input_hdl;
-        let output_hdl = self.output_hdl;
+        let main_hdl = self.main_hdl;
 
         self.update_node(
-            input_hdl,
+            main_hdl,
             Protocol::Init(
                 Effector {
-                    handle: input_hdl,
-                    sender: sender.clone(),
-                    reactor: reactor.clone(),
-                }
-            )
-        )?;
-        self.update_node(
-            output_hdl,
-            Protocol::Init(
-                Effector {
-                    handle: output_hdl,
+                    handle: main_hdl,
                     sender: sender.clone(),
                     reactor: reactor.clone(),
                 }
             )
         )?;
 
-        for node in (*self.nodes).borrow_mut().misc.values_mut() {
+        for (hdl, node) in (*self.nodes).borrow_mut().misc.iter_mut() {
             node.update(
                 Protocol::Init(
                     Effector {
-                        handle: Handle::new_v4(),
+                        handle: *hdl,
                         sender: sender.clone(),
                         reactor: reactor.clone(),
                     }
@@ -252,8 +215,7 @@ impl<M, C> Cortex<M, C> where
         {
             let mut nodes = (*self.nodes).borrow_mut();
 
-            nodes.input.update(Protocol::Start)?;
-            nodes.output.update(Protocol::Start)?;
+            nodes.main.update(Protocol::Start)?;
 
             for node in nodes.misc.values_mut() {
                 node.update(Protocol::Start)?;
@@ -264,7 +226,7 @@ impl<M, C> Cortex<M, C> where
     }
 
     fn add_input(self, input: Handle, constraint: C) -> Result<Self> {
-        (*self.nodes).borrow_mut().input.update
+        (*self.nodes).borrow_mut().main.update
             (Protocol::AddInput(input, constraint)
         )?;
 
@@ -272,7 +234,7 @@ impl<M, C> Cortex<M, C> where
     }
 
     fn add_output(self, output: Handle, constraint: C) -> Result<Self> {
-        (*self.nodes).borrow_mut().output.update(
+        (*self.nodes).borrow_mut().main.update(
             Protocol::AddOutput(output, constraint)
         )?;
 
@@ -296,15 +258,14 @@ impl<M, C> Cortex<M, C> where
         match msg {
             Protocol::Payload(src, dest, msg) => {
                 let actual_src = {
-                    // check if src is output or input
-                    if src == nodes.output_hdl || src == nodes.input_hdl {
-                        // if src is a special node, then it becomes tricky.
+                    // check if src is the main lobe
+                    if src == nodes.main_hdl {
+                        // if src is the main node, then it becomes tricky.
                         // these are allowed to send to both internal and
-                        // external nodes, so the question becomes whether or
-                        // not to advertise itself as the node or the cortex
+                        // external lobes, so the question becomes whether or
+                        // not to advertise itself as the lobe or the cortex
 
-                        if dest == nodes.input_hdl
-                            || dest == nodes.output_hdl
+                        if dest == nodes.main_hdl
                             || nodes.misc.contains_key(&dest)
                         {
                             // internal node - use src
@@ -320,11 +281,8 @@ impl<M, C> Cortex<M, C> where
                     }
                 };
 
-                if dest == nodes.input_hdl {
-                    nodes.input.update(Protocol::Message(actual_src, msg))?;
-                }
-                else if dest == nodes.output_hdl {
-                    nodes.output.update(Protocol::Message(actual_src, msg))?;
+                if dest == nodes.main_hdl {
+                    nodes.main.update(Protocol::Message(actual_src, msg))?;
                 }
                 else if let Some(ref mut node) = nodes.misc.get_mut(&dest) {
                     // send to internal node
@@ -369,10 +327,7 @@ impl<M, C> Lobe for Cortex<M, C> where
 
             Protocol::Start => self.start(),
             Protocol::Message(src, msg) => {
-                self.update_node(
-                    self.input_hdl,
-                    Protocol::Message(src, msg)
-                )?;
+                self.update_node(self.main_hdl, Protocol::Message(src, msg))?;
 
                 Ok(self)
             },

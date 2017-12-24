@@ -25,7 +25,6 @@ type IncrementerEffector = Effector<
 type IncrementerProtocol = Protocol<
     IncrementerMessage, IncrementerConstraint
 >;
-type IncrementerCortex = Cortex<IncrementerMessage, IncrementerConstraint>;
 
 impl From<CounterMessage> for IncrementerMessage {
     fn from(msg: CounterMessage) -> IncrementerMessage {
@@ -136,7 +135,6 @@ enum CounterConstraint {
 
 type CounterEffector = Effector<CounterMessage, CounterConstraint>;
 type CounterProtocol = Protocol<CounterMessage, CounterConstraint>;
-type CounterCortex = Cortex<CounterMessage, CounterConstraint>;
 
 impl From<IncrementerMessage> for CounterMessage {
     fn from(msg: IncrementerMessage) -> CounterMessage {
@@ -310,39 +308,33 @@ impl Lobe for ForwarderLobe {
 
 #[test]
 fn test_cortex() {
-    let mut cortex = IncrementerCortex::new(
-        IncrementerLobe::new(), CounterLobe::new()
-    );
+    let mut cortex = Cortex::new(IncrementerLobe::new());
 
-    let input = cortex.get_input();
-    let output = cortex.get_output();
-    cortex.connect(input, output, IncrementerConstraint::Incrementer);
+    let counter = cortex.add_lobe(CounterLobe::new());
+
+    let main = cortex.get_main_handle();
+    println!("cortex {}", main);
+    cortex.connect(main, counter, IncrementerConstraint::Incrementer);
 
     run(cortex).unwrap();
 }
 
 #[test]
 fn test_sub_cortex() {
-    let mut counter_cortex = CounterCortex::new(
-        ForwarderLobe::new(), CounterLobe::new()
-    );
+    let mut counter_cortex = Cortex::new(ForwarderLobe::new());
 
-    let counter_input = counter_cortex.get_input();
-    let counter_output = counter_cortex.get_output();
-    // connect the forwarder to the counter with the Forwarder constraint
-    counter_cortex.connect(
-        counter_input, counter_output, CounterConstraint::Forwarder
-    );
+    let forwarder = counter_cortex.get_main_handle();
+    let counter = counter_cortex.add_lobe(CounterLobe::new());
 
-    let mut inc_cortex = IncrementerCortex::new(
-        IncrementerLobe::new(), counter_cortex
-    );
+    counter_cortex.connect(forwarder, counter, CounterConstraint::Forwarder);
 
-    let inc_input = inc_cortex.get_input();
-    let inc_output = inc_cortex.get_output();
+    let mut inc_cortex = Cortex::new(IncrementerLobe::new());
+
+    let incrementer = inc_cortex.get_main_handle();
+    let counter = inc_cortex.add_lobe(counter_cortex);
     // connect the incrementer to the counter cortex
     inc_cortex.connect(
-        inc_input, inc_output, IncrementerConstraint::Incrementer
+        incrementer, counter, IncrementerConstraint::Incrementer
     );
 
     run(inc_cortex).unwrap();
@@ -396,9 +388,7 @@ fn test_lobe_error() {
         panic!("lobe update was supposed to fail");
     }
 
-    if let Ok(_) = run(
-        IncrementerCortex::new(UpdateErrorLobe { }, UpdateErrorLobe { })
-    ) {
+    if let Ok(_) = run(Cortex::new(UpdateErrorLobe { })) {
         panic!("cortex updates were supposed to fail");
     }
 }
