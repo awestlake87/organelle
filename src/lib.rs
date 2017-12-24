@@ -25,6 +25,7 @@ use uuid::Uuid;
 error_chain! {
     foreign_links {
         Io(std::io::Error) #[doc = "glue for io::Error"];
+        Canceled(futures::Canceled) #[doc = "glue for futures::Canceled"];
     }
     errors {
         /// a lobe returned an error when called into
@@ -68,6 +69,9 @@ pub enum Protocol<M> {
 
     /// tells the cortex to stop executing
     Stop,
+
+    /// stop the cortex because of an error
+    Err(Error),
 }
 
 impl<M> Protocol<M> {
@@ -111,6 +115,8 @@ impl<M> Protocol<M> {
             ),
 
             Protocol::Stop => Protocol::Stop,
+
+            Protocol::Err(e) => Protocol::Err(e),
         }
     }
 }
@@ -153,6 +159,11 @@ impl<M> Effector<M> where M: 'static {
     /// stop the cortex
     pub fn stop(&self) {
         self.send_cortex_message(Protocol::Stop);
+    }
+
+    /// stop the cortex because of an error
+    pub fn error(&self, e: Error) {
+        self.send_cortex_message(Protocol::Err(e));
     }
 
     /// spawn a future on the reactor
@@ -198,12 +209,14 @@ impl<L, I, O> Node<O> for LobeWrapper<L, I> where
     O: From<I> + Into<I> + 'static
 {
     fn update(&mut self, msg: Protocol<O>) -> Result<()> {
-        let lobe = mem::replace(&mut self.0, None)
-            .unwrap()
-            .update(Protocol::<I>::convert_protocol(msg))?
-        ;
+        if self.0.is_some() {
+            let lobe = mem::replace(&mut self.0, None)
+                .unwrap()
+                .update(Protocol::<I>::convert_protocol(msg))?
+            ;
 
-        self.0 = Some(lobe);
+            self.0 = Some(lobe);
+        }
 
         Ok(())
     }
@@ -564,6 +577,15 @@ pub fn run<T, M>(lobe: T) -> Result<()> where
     let handle = Handle::new_v4();
     let reactor = core.handle();
 
+    let sender_tx = queue_tx.clone();
+    let sender: Rc<Fn(&reactor::Handle, Protocol<M>)> = Rc::from(
+        move |r: &reactor::Handle, msg| r.spawn(
+             sender_tx.clone()
+                .send(msg)
+                .then(|_| Ok(()))
+        )
+    );
+
     // Rc to keep it alive, RefCell to mutate it in the event loop
     let mut node = LobeWrapper::new(lobe);
 
@@ -573,13 +595,7 @@ pub fn run<T, M>(lobe: T) -> Result<()> where
                 Protocol::Init(
                     Effector {
                         handle: handle,
-                        sender: Rc::from(
-                            move |r: &reactor::Handle, msg| r.spawn(
-                                 queue_tx.clone()
-                                    .send(msg)
-                                    .then(|_| Ok(()))
-                            )
-                        ),
+                        sender: Rc::clone(&sender),
                         reactor: reactor,
                     }
                 )
@@ -592,52 +608,64 @@ pub fn run<T, M>(lobe: T) -> Result<()> where
 
     );
 
+    let (tx, rx) = mpsc::channel::<Error>(1);
+    let reactor = core.handle();
+
     let stream_future = queue_rx.take_while(
         |msg| match *msg {
-            Protocol::Stop => {
-                println!("ended cleanly");
-                Ok(false)
-            },
+            Protocol::Stop => Ok(false),
             _ => Ok(true)
         }
     ).for_each(
         move |msg| {
-            match msg {
+            if let Err(e) = match msg {
                 Protocol::Init(effector) => node.update(
                     Protocol::Init(effector)
-                ).unwrap(),
+                ),
                 Protocol::AddInput(input) => node.update(
                     Protocol::AddInput(input)
-                ).unwrap(),
+                ),
                 Protocol::AddOutput(output) => node.update(
                     Protocol::AddOutput(output)
-                ).unwrap(),
+                ),
 
-                Protocol::Start => node.update(Protocol::Start).unwrap(),
+                Protocol::Start => node.update(Protocol::Start),
 
                 Protocol::Payload(src, dest, msg) => {
                     // messages should only be sent to our main lobe
                     assert_eq!(dest, handle);
 
-                    node.update(Protocol::Message(src, msg)).unwrap();
+                    node.update(Protocol::Message(src, msg))
                 },
 
+                Protocol::Err(e) => Err(e),
+
                 _ => unreachable!(),
+            } {
+                reactor.spawn(
+                    tx.clone().send(e).then(|_| Ok(()))
+                );
             }
 
             Ok(())
         }
     );
 
-    core.run(
+    let result = core.run(
         stream_future
-            .map(|_| ())
-            .map_err(|_| -> Error {
-                ErrorKind::Msg("whoops!".into()).into()
-            })
+            .map(|_| Ok(()))
+            .select(
+                rx.into_future()
+                    .map(|(item, _)| Err(item.unwrap()))
+                    .map_err(|_| ())
+            )
+            .map(|(result, _)| result)
+            .map_err(
+                |_| -> Error { ErrorKind::Msg("select error".into()).into() }
+            )
     )?;
 
-    Ok(())
+    result
 }
 
 
@@ -894,5 +922,56 @@ mod tests {
         inc_cortex.connect(inc_input, inc_output);
 
         run(inc_cortex).unwrap();
+    }
+
+    struct InitErrorLobe {
+
+    }
+
+    impl Lobe for InitErrorLobe {
+        type Message = IncrementerMessage;
+
+        fn update(self, msg: Protocol<Self::Message>) -> Result<Self> {
+            match msg {
+                Protocol::Init(effector) => {
+                    effector.error("a lobe error!".into());
+
+                    Ok(self)
+                },
+
+                _ => Ok(self),
+            }
+        }
+    }
+
+    struct UpdateErrorLobe {
+
+    }
+
+    impl Lobe for UpdateErrorLobe {
+        type Message = IncrementerMessage;
+
+        fn update(self, _: Protocol<Self::Message>) -> Result<Self> {
+            bail!("update failed")
+        }
+    }
+
+    #[test]
+    fn test_lobe_error() {
+        if let Ok(_) = run(InitErrorLobe { }) {
+            panic!("lobe init was supposed to fail");
+        }
+
+        if let Ok(_) = run(UpdateErrorLobe { }) {
+            panic!("lobe update was supposed to fail");
+        }
+
+        if let Ok(_) = run(
+            Cortex::<IncrementerMessage>::new(
+                UpdateErrorLobe { }, UpdateErrorLobe { }
+            )
+        ) {
+            panic!("cortex updates were supposed to fail");
+        }
     }
 }
