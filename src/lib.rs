@@ -84,7 +84,7 @@ impl<M> Protocol<M> {
                     Effector {
                         handle: effector.handle,
                         sender: Rc::from(
-                            move |effector: &reactor::Handle, msg: Protocol<M>| sender(
+                            move |effector: &reactor::Handle, msg| sender(
                                 effector,
                                 Protocol::<T>::convert_protocol(
                                     msg
@@ -175,13 +175,13 @@ pub trait Lobe: Sized {
     /// user-defined message to be passed between lobes
     type Message;
     /// apply any changes to the lobe's state as a result of _msg
-    fn update(self, _msg: Protocol<Self::Message>) -> Self {
-        self
+    fn update(self, _msg: Protocol<Self::Message>) -> Result<Self> {
+        Ok(self)
     }
 }
 
 trait Node<M> {
-    fn update(&mut self, msg: Protocol<M>);
+    fn update(&mut self, msg: Protocol<M>) -> Result<()>;
 }
 
 struct LobeWrapper<L, M>(Option<L>, PhantomData<M>);
@@ -197,13 +197,15 @@ impl<L, I, O> Node<O> for LobeWrapper<L, I> where
     I: From<O> + Into<O> + 'static,
     O: From<I> + Into<I> + 'static
 {
-    fn update(&mut self, msg: Protocol<O>) {
+    fn update(&mut self, msg: Protocol<O>) -> Result<()> {
         let lobe = mem::replace(&mut self.0, None)
             .unwrap()
-            .update(Protocol::<I>::convert_protocol(msg))
+            .update(Protocol::<I>::convert_protocol(msg))?
         ;
 
         self.0 = Some(lobe);
+
+        Ok(())
     }
 }
 
@@ -315,21 +317,21 @@ impl<M> Cortex<M> {
         self.output_hdl
     }
 
-    fn update_node(&self, hdl: Handle, msg: Protocol<M>) {
+    fn update_node(&self, hdl: Handle, msg: Protocol<M>) -> Result<()> {
         let mut nodes = (*self.nodes).borrow_mut();
 
         if hdl == nodes.input_hdl {
-            nodes.input.update(msg);
+            nodes.input.update(msg)
         }
         else if hdl == nodes.output_hdl {
-            nodes.output.update(msg);
+            nodes.output.update(msg)
         }
         else {
-            nodes.misc.get_mut(&hdl).unwrap().update(msg);
+            nodes.misc.get_mut(&hdl).unwrap().update(msg)
         }
     }
 
-    fn init<T>(mut self, effector: Effector<T>) -> Self where
+    fn init<T>(mut self, effector: Effector<T>) -> Result<Self> where
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
     {
@@ -380,7 +382,7 @@ impl<M> Cortex<M> {
                     reactor: reactor.clone(),
                 }
             )
-        );
+        )?;
         self.update_node(
             output_hdl,
             Protocol::Init(
@@ -390,7 +392,7 @@ impl<M> Cortex<M> {
                     reactor: reactor.clone(),
                 }
             )
-        );
+        )?;
 
         for node in (*self.nodes).borrow_mut().misc.values_mut() {
             node.update(
@@ -401,12 +403,12 @@ impl<M> Cortex<M> {
                         reactor: reactor.clone(),
                     }
                 )
-            );
+            )?;
         }
 
         for &(input, output) in &self.connections {
-            self.update_node(input, Protocol::AddOutput(output));
-            self.update_node(output, Protocol::AddInput(input));
+            self.update_node(input, Protocol::AddOutput(output))?;
+            self.update_node(output, Protocol::AddInput(input))?;
         }
 
         let external_sender = effector.sender;
@@ -421,7 +423,7 @@ impl<M> Cortex<M> {
                     &*external_sender,
                     &forward_reactor,
                     msg
-                );
+                ).unwrap();
 
                 Ok(())
             }
@@ -429,34 +431,34 @@ impl<M> Cortex<M> {
 
         reactor.spawn(stream_future);
 
-        self
+        Ok(self)
     }
 
-    fn start(self) -> Self {
+    fn start(self) -> Result<Self> {
         {
             let mut nodes = (*self.nodes).borrow_mut();
 
-            nodes.input.update(Protocol::Start);
-            nodes.output.update(Protocol::Start);
+            nodes.input.update(Protocol::Start)?;
+            nodes.output.update(Protocol::Start)?;
 
             for node in nodes.misc.values_mut() {
-                node.update(Protocol::Start);
+                node.update(Protocol::Start)?;
             }
         }
 
-        self
+        Ok(self)
     }
 
-    fn add_input(self, input: Handle) -> Self {
-        (*self.nodes).borrow_mut().input.update(Protocol::AddInput(input));
+    fn add_input(self, input: Handle) -> Result<Self> {
+        (*self.nodes).borrow_mut().input.update(Protocol::AddInput(input))?;
 
-        self
+        Ok(self)
     }
 
-    fn add_output(self, output: Handle) -> Self {
-        (*self.nodes).borrow_mut().output.update(Protocol::AddOutput(output));
+    fn add_output(self, output: Handle) -> Result<Self> {
+        (*self.nodes).borrow_mut().output.update(Protocol::AddOutput(output))?;
 
-        self
+        Ok(self)
     }
 
     fn forward<T>(
@@ -465,9 +467,10 @@ impl<M> Cortex<M> {
         sender: &Fn(&reactor::Handle, Protocol<T>),
         reactor: &reactor::Handle,
         msg: Protocol<M>
-    ) where
-        M: From<T> + Into<T> + 'static,
-        T: From<M> + Into<M> + 'static,
+    )
+        -> Result<()> where
+            M: From<T> + Into<T> + 'static,
+            T: From<M> + Into<M> + 'static,
     {
         match msg {
             Protocol::Payload(src, dest, msg) => {
@@ -497,14 +500,14 @@ impl<M> Cortex<M> {
                 };
 
                 if dest == nodes.input_hdl {
-                    nodes.input.update(Protocol::Message(actual_src, msg));
+                    nodes.input.update(Protocol::Message(actual_src, msg))?;
                 }
                 else if dest == nodes.output_hdl {
-                    nodes.output.update(Protocol::Message(actual_src, msg));
+                    nodes.output.update(Protocol::Message(actual_src, msg))?;
                 }
                 else if let Some(ref mut node) = nodes.misc.get_mut(&dest) {
                     // send to internal node
-                    node.update(Protocol::Message(actual_src, msg));
+                    node.update(Protocol::Message(actual_src, msg))?;
                 }
                 else {
                     // send to external node
@@ -521,13 +524,15 @@ impl<M> Cortex<M> {
 
             _ => unimplemented!()
         }
+
+        Ok(())
     }
 }
 
 impl<M> Lobe for Cortex<M> where M: 'static {
     type Message = M;
 
-    fn update(self, msg: Protocol<M>) -> Self {
+    fn update(self, msg: Protocol<M>) -> Result<Self> {
         match msg {
             Protocol::Init(effector) => self.init(effector),
             Protocol::AddInput(input) => self.add_input(input),
@@ -538,9 +543,9 @@ impl<M> Lobe for Cortex<M> where M: 'static {
                 self.update_node(
                     self.input_hdl,
                     Protocol::Message(src, msg)
-                );
+                )?;
 
-                self
+                Ok(self)
             },
 
             _ => unreachable!(),
@@ -600,21 +605,21 @@ pub fn run<T, M>(lobe: T) -> Result<()> where
             match msg {
                 Protocol::Init(effector) => node.update(
                     Protocol::Init(effector)
-                ),
+                ).unwrap(),
                 Protocol::AddInput(input) => node.update(
                     Protocol::AddInput(input)
-                ),
+                ).unwrap(),
                 Protocol::AddOutput(output) => node.update(
                     Protocol::AddOutput(output)
-                ),
+                ).unwrap(),
 
-                Protocol::Start => node.update(Protocol::Start),
+                Protocol::Start => node.update(Protocol::Start).unwrap(),
 
                 Protocol::Payload(src, dest, msg) => {
                     // messages should only be sent to our main lobe
                     assert_eq!(dest, handle);
 
-                    node.update(Protocol::Message(src, msg));
+                    node.update(Protocol::Message(src, msg)).unwrap();
                 },
 
                 _ => unreachable!(),
@@ -679,7 +684,7 @@ mod tests {
     impl Lobe for IncrementerLobe {
         type Message = IncrementerMessage;
 
-        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
+        fn update(mut self, msg: Protocol<Self::Message>) -> Result<Self> {
             match msg {
                 Protocol::Init(effector) => {
                     println!("incrementer: {}", effector.handle());
@@ -713,7 +718,7 @@ mod tests {
                 _ => (),
             }
 
-            self
+            Ok(self)
         }
     }
 
@@ -759,7 +764,7 @@ mod tests {
     impl Lobe for CounterLobe {
         type Message = CounterMessage;
 
-        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
+        fn update(mut self, msg: Protocol<Self::Message>) -> Result<Self> {
             match msg {
                 Protocol::Init(effector) => {
                     println!("counter: {}", effector.handle());
@@ -790,7 +795,7 @@ mod tests {
                 _ => (),
             }
 
-            self
+            Ok(self)
         }
     }
 
@@ -814,7 +819,7 @@ mod tests {
     impl Lobe for ForwarderLobe {
         type Message = CounterMessage;
 
-        fn update(mut self, msg: Protocol<Self::Message>) -> Self {
+        fn update(mut self, msg: Protocol<Self::Message>) -> Result<Self> {
             match msg {
                 Protocol::Init(effector) => {
                     println!("forwarder: {}", effector.handle());
@@ -853,7 +858,7 @@ mod tests {
                 _ => ()
             }
 
-            self
+            Ok(self)
         }
     }
 
