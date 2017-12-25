@@ -313,7 +313,7 @@ impl<M, C> Cortex<M, C> where
             },
 
             Protocol::Stop => sender(reactor, Protocol::Stop),
-            Protocol::Error(e) => sender(reactor, Protocol::Error(e)),
+            Protocol::Err(e) => sender(reactor, Protocol::Err(e)),
 
             _ => unimplemented!()
         }
