@@ -78,14 +78,27 @@ impl<M, C> Cortex<M, C> where
     /// as long as the lobe's message type can convert Into and From the
     /// cortex's message type, it can be added to the cortex and can
     /// communicate with any lobes that do the same.
-    pub fn add_lobe<L, T, U>(&mut self, lobe: L) -> Handle where
-        L: Lobe<Message=T, Constraint=U> + 'static,
+    pub fn add_lobe<L>(&mut self, lobe: L) -> Handle where
+        L: Lobe + 'static,
 
-        M: From<T> + Into<T> + 'static,
-        T: From<M> + Into<M> + 'static,
+        M: From<L::Message> + Into<L::Message> + 'static,
+        L::Message: From<M> + Into<M> + 'static,
 
-        C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq + 'static,
-        U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
+        C: From<L::Constraint>
+            + Into<L::Constraint>
+            + Copy
+            + Clone
+            + Eq
+            + PartialEq
+            + 'static,
+
+        L::Constraint: From<C>
+            + Into<C>
+            + Copy
+            + Clone
+            + Eq
+            + PartialEq
+            + 'static,
     {
         let node = Box::new(LobeWrapper::new(lobe));
         let handle = Handle::new_v4();
