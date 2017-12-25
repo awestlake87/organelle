@@ -188,6 +188,11 @@ impl<M, C> Effector<M, C> where
         self.reactor.spawn(future);
     }
 
+    /// get a reactor remote
+    pub fn remote(&self) -> reactor::Remote {
+        self.reactor.remote().clone()
+    }
+
     fn send_cortex_message(&self, msg: Protocol<M, C>) {
         (*self.sender)(&self.reactor, msg);
     }
