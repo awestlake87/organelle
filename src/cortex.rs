@@ -9,12 +9,12 @@ use tokio_core::reactor;
 
 use super::{ Result, Protocol, Handle, Effector, Lobe, Node, LobeWrapper };
 
-struct CortexNodePool<M, C> {
+struct CortexNodePool<M, R> {
     main_hdl:       Handle,
 
-    main:           Box<Node<M, C>>,
+    main:           Box<Node<M, R>>,
 
-    misc:           HashMap<Handle, Box<Node<M, C>>>,
+    misc:           HashMap<Handle, Box<Node<M, R>>>,
 }
 
 /// a special lobe designed to contain a network of interconnected lobes
@@ -33,22 +33,22 @@ struct CortexNodePool<M, C> {
 ///
 /// any cortex can be plugged into any other cortex provided their messages and
 /// constraints can convert between each other using From and Into
-pub struct Cortex<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
-    effector:       Option<Effector<M, C>>,
+pub struct Cortex<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
+    effector:       Option<Effector<M, R>>,
 
     main_hdl:       Handle,
-    connections:    Vec<(Handle, Handle, C)>,
+    connections:    Vec<(Handle, Handle, R)>,
 
-    nodes:          Rc<RefCell<CortexNodePool<M, C>>>,
+    nodes:          Rc<RefCell<CortexNodePool<M, R>>>,
 }
 
-impl<M, C> Cortex<M, C> where
+impl<M, R> Cortex<M, R> where
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static,
+    R: Copy + Clone + Eq + PartialEq + 'static,
 {
     /// create a new cortex with input and output lobes
     pub fn new<L>(main: L) -> Self where
-        L: Lobe<Message=M, Constraint=C> + 'static,
+        L: Lobe<Message=M, Role=R> + 'static,
     {
         let main_hdl = Handle::new_v4();
 
@@ -60,7 +60,7 @@ impl<M, C> Cortex<M, C> where
 
             nodes: Rc::from(
                 RefCell::new(
-                    CortexNodePool::<M, C> {
+                    CortexNodePool::<M, R> {
                         main_hdl: main_hdl,
 
                         main: Box::new(LobeWrapper::new(main)),
@@ -84,16 +84,16 @@ impl<M, C> Cortex<M, C> where
         M: From<L::Message> + Into<L::Message> + 'static,
         L::Message: From<M> + Into<M> + 'static,
 
-        C: From<L::Constraint>
-            + Into<L::Constraint>
+        R: From<L::Role>
+            + Into<L::Role>
             + Copy
             + Clone
             + Eq
             + PartialEq
             + 'static,
 
-        L::Constraint: From<C>
-            + Into<C>
+        L::Role: From<R>
+            + Into<R>
             + Copy
             + Clone
             + Eq
@@ -109,8 +109,8 @@ impl<M, C> Cortex<M, C> where
     }
 
     /// connect input to output and update them accordingly
-    pub fn connect(&mut self, input: Handle, output: Handle, constraint: C) {
-        self.connections.push((input, output, constraint));
+    pub fn connect(&mut self, input: Handle, output: Handle, role: R) {
+        self.connections.push((input, output, role));
     }
 
     /// get the input lobe's handle
@@ -118,7 +118,7 @@ impl<M, C> Cortex<M, C> where
         self.main_hdl
     }
 
-    fn update_node(&self, hdl: Handle, msg: Protocol<M, C>) -> Result<()> {
+    fn update_node(&self, hdl: Handle, msg: Protocol<M, R>) -> Result<()> {
         let mut nodes = (*self.nodes).borrow_mut();
 
         if hdl == nodes.main_hdl {
@@ -133,8 +133,8 @@ impl<M, C> Cortex<M, C> where
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
 
-        C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
-        U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq,
+        R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
+        U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq,
     {
         let cortex_hdl = effector.handle;
 
@@ -144,7 +144,7 @@ impl<M, C> Cortex<M, C> where
             Effector {
                 handle: cortex_hdl.clone(),
                 sender: Rc::from(
-                    move |r: &reactor::Handle, msg: Protocol<M, C>| r.spawn(
+                    move |r: &reactor::Handle, msg: Protocol<M, R>| r.spawn(
                         queue_tx.clone().send(msg)
                            .then(
                                |result| match result {
@@ -196,9 +196,9 @@ impl<M, C> Cortex<M, C> where
             )?;
         }
 
-        for &(input, output, constraint) in &self.connections {
-            self.update_node(input, Protocol::AddOutput(output, constraint))?;
-            self.update_node(output, Protocol::AddInput(input, constraint))?;
+        for &(input, output, role) in &self.connections {
+            self.update_node(input, Protocol::AddOutput(output, role))?;
+            self.update_node(output, Protocol::AddInput(input, role))?;
         }
 
         let external_sender = effector.sender;
@@ -238,17 +238,17 @@ impl<M, C> Cortex<M, C> where
         Ok(self)
     }
 
-    fn add_input(self, input: Handle, constraint: C) -> Result<Self> {
+    fn add_input(self, input: Handle, role: R) -> Result<Self> {
         (*self.nodes).borrow_mut().main.update
-            (Protocol::AddInput(input, constraint)
+            (Protocol::AddInput(input, role)
         )?;
 
         Ok(self)
     }
 
-    fn add_output(self, output: Handle, constraint: C) -> Result<Self> {
+    fn add_output(self, output: Handle, role: R) -> Result<Self> {
         (*self.nodes).borrow_mut().main.update(
-            Protocol::AddOutput(output, constraint)
+            Protocol::AddOutput(output, role)
         )?;
 
         Ok(self)
@@ -256,17 +256,17 @@ impl<M, C> Cortex<M, C> where
 
     fn forward<T, U>(
         cortex: Handle,
-        nodes: &mut CortexNodePool<M, C>,
+        nodes: &mut CortexNodePool<M, R>,
         sender: &Fn(&reactor::Handle, Protocol<T, U>),
         reactor: &reactor::Handle,
-        msg: Protocol<M, C>
+        msg: Protocol<M, R>
     )
         -> Result<()> where
             M: From<T> + Into<T> + 'static,
             T: From<M> + Into<M> + 'static,
 
-            C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
-            U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq,
+            R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
+            U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq,
     {
         match msg {
             Protocol::Payload(src, dest, msg) => {
@@ -322,21 +322,21 @@ impl<M, C> Cortex<M, C> where
     }
 }
 
-impl<M, C> Lobe for Cortex<M, C> where
+impl<M, R> Lobe for Cortex<M, R> where
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static,
+    R: Copy + Clone + Eq + PartialEq + 'static,
 {
     type Message = M;
-    type Constraint = C;
+    type Role = R;
 
-    fn update(self, msg: Protocol<M, C>) -> Result<Self> {
+    fn update(self, msg: Protocol<M, R>) -> Result<Self> {
         match msg {
             Protocol::Init(effector) => self.init(effector),
-            Protocol::AddInput(input, constraint) => self.add_input(
-                input, constraint
+            Protocol::AddInput(input, role) => self.add_input(
+                input, role
             ),
-            Protocol::AddOutput(output, constraint) => self.add_output(
-                output, constraint
+            Protocol::AddOutput(output, role) => self.add_output(
+                output, role
             ),
 
             Protocol::Start => self.start(),

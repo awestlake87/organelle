@@ -53,13 +53,13 @@ pub type Handle = Uuid;
 /// 4. any messages sent between lobes will come through Message
 /// 5. when a lobe determines that the cortex should stop, it can issue Stop
 ///     and the cortex will exit its event loop.
-pub enum Protocol<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
+pub enum Protocol<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
     /// initializes a lobe with an effector to use
-    Init(Effector<M, C>),
-    /// add an input Handle with connection constraint
-    AddInput(Handle, C),
-    /// add an output Handle with connection constraint
-    AddOutput(Handle, C),
+    Init(Effector<M, R>),
+    /// add an input Handle with connection role
+    AddInput(Handle, R),
+    /// add an output Handle with connection role
+    AddOutput(Handle, R),
 
     /// notifies lobe that cortex has begun execution
     Start,
@@ -77,17 +77,17 @@ pub enum Protocol<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
     Err(Error),
 }
 
-impl<M, C> Protocol<M, C> where
+impl<M, R> Protocol<M, R> where
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static,
+    R: Copy + Clone + Eq + PartialEq + 'static,
 {
     fn convert_protocol<T, U>(msg: Protocol<T, U>) -> Self
         where
             M: From<T> + Into<T> + 'static,
             T: From<M> + Into<M> + 'static,
 
-            C: From<U> + Into<U> + Copy + Clone + Eq + PartialEq + 'static,
-            U: From<C> + Into<C> + Copy + Clone + Eq + PartialEq + 'static,
+            R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq + 'static,
+            U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq + 'static,
     {
         match msg {
             Protocol::Init(effector) => {
@@ -107,11 +107,11 @@ impl<M, C> Protocol<M, C> where
                 )
             },
 
-            Protocol::AddInput(input, constraint) => Protocol::AddInput(
-                input, constraint.into()
+            Protocol::AddInput(input, role) => Protocol::AddInput(
+                input, role.into()
             ),
-            Protocol::AddOutput(output, constraint) => Protocol::AddOutput(
-                output, constraint.into()
+            Protocol::AddOutput(output, role) => Protocol::AddOutput(
+                output, role.into()
             ),
 
             Protocol::Start => Protocol::Start,
@@ -136,15 +136,15 @@ impl<M, C> Protocol<M, C> where
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
-pub struct Effector<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
+pub struct Effector<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
     handle:     Handle,
-    sender:     Rc<Fn(&reactor::Handle, Protocol<M, C>)>,
+    sender:     Rc<Fn(&reactor::Handle, Protocol<M, R>)>,
     reactor:    reactor::Handle,
 }
 
-impl<M, C> Clone for Effector<M, C> where
+impl<M, R> Clone for Effector<M, R> where
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static,
+    R: Copy + Clone + Eq + PartialEq + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -155,9 +155,9 @@ impl<M, C> Clone for Effector<M, C> where
     }
 }
 
-impl<M, C> Effector<M, C> where
+impl<M, R> Effector<M, R> where
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static,
+    R: Copy + Clone + Eq + PartialEq + 'static,
 {
     /// get the Handle associated with the lobe that owns this effector
     pub fn handle(&self) -> Handle {
@@ -193,32 +193,32 @@ impl<M, C> Effector<M, C> where
         self.reactor.remote().clone()
     }
 
-    fn send_cortex_message(&self, msg: Protocol<M, C>) {
+    fn send_cortex_message(&self, msg: Protocol<M, R>) {
         (*self.sender)(&self.reactor, msg);
     }
 }
 
-trait Node<M: 'static, C: Copy + Clone + Eq + PartialEq + 'static> {
-    fn update(&mut self, msg: Protocol<M, C>) -> Result<()>;
+trait Node<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
+    fn update(&mut self, msg: Protocol<M, R>) -> Result<()>;
 }
 
-struct LobeWrapper<L, M, C>(Option<L>, PhantomData<M>, PhantomData<C>);
+struct LobeWrapper<L, M, R>(Option<L>, PhantomData<M>, PhantomData<R>);
 
-impl<L, M, C> LobeWrapper<L, M, C> where
-    L: Lobe<Message=M, Constraint=C>,
+impl<L, M, R> LobeWrapper<L, M, R> where
+    L: Lobe<Message=M, Role=R>,
 
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static
+    R: Copy + Clone + Eq + PartialEq + 'static
 {
     fn new(lobe: L) -> Self {
-        LobeWrapper::<L, M, C>(
+        LobeWrapper::<L, M, R>(
             Some(lobe), PhantomData::default(), PhantomData::default()
         )
     }
 }
 
 impl<L, IM, OM, IC, OC> Node<OM, OC> for LobeWrapper<L, IM, IC> where
-    L: Lobe<Message=IM, Constraint=IC>,
+    L: Lobe<Message=IM, Role=IC>,
 
     IM: From<OM> + Into<OM> + 'static,
     OM: From<IM> + Into<IM> + 'static,

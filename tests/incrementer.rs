@@ -13,18 +13,14 @@ enum IncrementerMessage {
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum IncrementerConstraint {
+enum IncrementerRole {
     Incrementer,
     Forwarder,
     Counter,
 }
 
-type IncrementerEffector = Effector<
-    IncrementerMessage, IncrementerConstraint
->;
-type IncrementerProtocol = Protocol<
-    IncrementerMessage, IncrementerConstraint
->;
+type IncrementerEffector = Effector<IncrementerMessage, IncrementerRole>;
+type IncrementerProtocol = Protocol<IncrementerMessage, IncrementerRole>;
 
 impl From<CounterMessage> for IncrementerMessage {
     fn from(msg: CounterMessage) -> IncrementerMessage {
@@ -37,16 +33,16 @@ impl From<CounterMessage> for IncrementerMessage {
     }
 }
 
-impl From<CounterConstraint> for IncrementerConstraint {
-    fn from(c: CounterConstraint) -> IncrementerConstraint {
+impl From<CounterRole> for IncrementerRole {
+    fn from(c: CounterRole) -> IncrementerRole {
         match c {
-            CounterConstraint::Incrementer => {
-                IncrementerConstraint::Incrementer
+            CounterRole::Incrementer => {
+                IncrementerRole::Incrementer
             },
-            CounterConstraint::Forwarder => {
-                IncrementerConstraint::Forwarder
+            CounterRole::Forwarder => {
+                IncrementerRole::Forwarder
             },
-            CounterConstraint::Counter => IncrementerConstraint::Counter,
+            CounterRole::Counter => IncrementerRole::Counter,
         }
     }
 }
@@ -72,7 +68,7 @@ impl IncrementerLobe {
 
 impl Lobe for IncrementerLobe {
     type Message = IncrementerMessage;
-    type Constraint = IncrementerConstraint;
+    type Role = IncrementerRole;
 
     fn update(mut self, msg: IncrementerProtocol) -> Result<Self> {
         match msg {
@@ -80,14 +76,14 @@ impl Lobe for IncrementerLobe {
                 println!("incrementer: {}", effector.handle());
                 self.effector = Some(effector);
             },
-            Protocol::AddOutput(output, constraint) => {
+            Protocol::AddOutput(output, role) => {
                 println!(
-                    "incrementer output {} {:#?}", output, constraint
+                    "incrementer output {} {:#?}", output, role
                 );
 
                 assert!(
-                    constraint == IncrementerConstraint::Incrementer
-                    || constraint == IncrementerConstraint::Forwarder
+                    role == IncrementerRole::Incrementer
+                    || role == IncrementerRole::Forwarder
                 );
 
                 self.output = Some(output);
@@ -127,14 +123,14 @@ enum CounterMessage {
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum CounterConstraint {
+enum CounterRole {
     Incrementer,
     Forwarder,
     Counter,
 }
 
-type CounterEffector = Effector<CounterMessage, CounterConstraint>;
-type CounterProtocol = Protocol<CounterMessage, CounterConstraint>;
+type CounterEffector = Effector<CounterMessage, CounterRole>;
+type CounterProtocol = Protocol<CounterMessage, CounterRole>;
 
 impl From<IncrementerMessage> for CounterMessage {
     fn from(msg: IncrementerMessage) -> CounterMessage {
@@ -147,17 +143,17 @@ impl From<IncrementerMessage> for CounterMessage {
     }
 }
 
-impl From<IncrementerConstraint> for CounterConstraint {
-    fn from(constraint: IncrementerConstraint) -> CounterConstraint {
-        match constraint {
-            IncrementerConstraint::Incrementer => {
-                CounterConstraint::Incrementer
+impl From<IncrementerRole> for CounterRole {
+    fn from(role: IncrementerRole) -> CounterRole {
+        match role {
+            IncrementerRole::Incrementer => {
+                CounterRole::Incrementer
             },
-            IncrementerConstraint::Forwarder => {
-                CounterConstraint::Forwarder
+            IncrementerRole::Forwarder => {
+                CounterRole::Forwarder
             },
-            IncrementerConstraint::Counter => {
-                CounterConstraint::Counter
+            IncrementerRole::Counter => {
+                CounterRole::Counter
             },
         }
     }
@@ -187,7 +183,7 @@ impl CounterLobe {
 
 impl Lobe for CounterLobe {
     type Message = CounterMessage;
-    type Constraint = CounterConstraint;
+    type Role = CounterRole;
 
     fn update(mut self, msg: CounterProtocol) -> Result<Self>
     {
@@ -196,12 +192,12 @@ impl Lobe for CounterLobe {
                 println!("counter: {}", effector.handle());
                 self.effector = Some(effector);
             },
-            Protocol::AddInput(input, constraint) => {
-                println!("counter input {} {:#?}", input, constraint);
+            Protocol::AddInput(input, role) => {
+                println!("counter input {} {:#?}", input, role);
 
                 assert!(
-                    constraint == CounterConstraint::Incrementer
-                    || constraint == CounterConstraint::Forwarder
+                    role == CounterRole::Incrementer
+                    || role == CounterRole::Forwarder
                 );
                 self.input = Some(input);
             },
@@ -231,7 +227,7 @@ impl Lobe for CounterLobe {
 }
 
 struct ForwarderLobe {
-    effector: Option<Effector<CounterMessage, CounterConstraint>>,
+    effector: Option<Effector<CounterMessage, CounterRole>>,
 
     input: Option<Handle>,
     output: Option<Handle>,
@@ -242,16 +238,16 @@ impl ForwarderLobe {
         Self { effector: None, input: None, output: None }
     }
 
-    fn effector(&self) -> &Effector<CounterMessage, CounterConstraint> {
+    fn effector(&self) -> &Effector<CounterMessage, CounterRole> {
         self.effector.as_ref().unwrap()
     }
 }
 
 impl Lobe for ForwarderLobe {
     type Message = CounterMessage;
-    type Constraint = CounterConstraint;
+    type Role = CounterRole;
 
-    fn update(mut self, msg: Protocol<Self::Message, Self::Constraint>)
+    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
         match msg {
@@ -259,19 +255,19 @@ impl Lobe for ForwarderLobe {
                 println!("forwarder: {}", effector.handle());
                 self.effector = Some(effector);
             },
-            Protocol::AddInput(input, constraint) => {
+            Protocol::AddInput(input, role) => {
                 assert!(
-                    constraint == CounterConstraint::Incrementer
-                    || constraint == CounterConstraint::Forwarder
+                    role == CounterRole::Incrementer
+                    || role == CounterRole::Forwarder
                 );
 
                 println!("forwarder input: {}", input);
                 self.input = Some(input);
             },
-            Protocol::AddOutput(output, constraint) => {
+            Protocol::AddOutput(output, role) => {
                 assert!(
-                    constraint == CounterConstraint::Counter
-                    || constraint == CounterConstraint::Forwarder
+                    role == CounterRole::Counter
+                    || role == CounterRole::Forwarder
                 );
 
                 println!("forwarder output: {}", output);
@@ -314,7 +310,7 @@ fn test_cortex() {
 
     let main = cortex.get_main_handle();
     println!("cortex {}", main);
-    cortex.connect(main, counter, IncrementerConstraint::Incrementer);
+    cortex.connect(main, counter, IncrementerRole::Incrementer);
 
     run(cortex).unwrap();
 }
@@ -326,7 +322,7 @@ fn test_sub_cortex() {
     let forwarder = counter_cortex.get_main_handle();
     let counter = counter_cortex.add_lobe(CounterLobe::new());
 
-    counter_cortex.connect(forwarder, counter, CounterConstraint::Forwarder);
+    counter_cortex.connect(forwarder, counter, CounterRole::Forwarder);
 
     let mut inc_cortex = Cortex::new(IncrementerLobe::new());
 
@@ -334,7 +330,7 @@ fn test_sub_cortex() {
     let counter = inc_cortex.add_lobe(counter_cortex);
     // connect the incrementer to the counter cortex
     inc_cortex.connect(
-        incrementer, counter, IncrementerConstraint::Incrementer
+        incrementer, counter, IncrementerRole::Incrementer
     );
 
     run(inc_cortex).unwrap();
@@ -346,7 +342,7 @@ struct InitErrorLobe {
 
 impl Lobe for InitErrorLobe {
     type Message = IncrementerMessage;
-    type Constraint = IncrementerConstraint;
+    type Role = IncrementerRole;
 
     fn update(self, msg: IncrementerProtocol)
         -> Result<Self>
@@ -369,7 +365,7 @@ struct UpdateErrorLobe {
 
 impl Lobe for UpdateErrorLobe {
     type Message = IncrementerMessage;
-    type Constraint = IncrementerConstraint;
+    type Role = IncrementerRole;
 
     fn update(self, _: IncrementerProtocol)
         -> Result<Self>

@@ -12,15 +12,15 @@ use super::{
 /// defines an interface for a lobe of any type
 ///
 /// generic across the user-defined message to be passed between lobes and the
-/// user-defined constraints for connections
+/// user-defined roles for connections
 pub trait Lobe: Sized {
     /// user-defined message to be passed between lobes
     type Message: 'static;
-    /// user-defined constraints for connections
-    type Constraint: Copy + Clone + Eq + PartialEq + 'static;
+    /// user-defined roles for connections
+    type Role: Copy + Clone + Eq + PartialEq + 'static;
 
     /// apply any changes to the lobe's state as a result of _msg
-    fn update(self, _msg: Protocol<Self::Message, Self::Constraint>)
+    fn update(self, _msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
         Ok(self)
@@ -28,10 +28,10 @@ pub trait Lobe: Sized {
 }
 
 /// spin up an event loop and run the provided lobe
-pub fn run<T, M, C>(lobe: T) -> Result<()> where
-    T: Lobe<Message=M, Constraint=C>,
+pub fn run<T, M, R>(lobe: T) -> Result<()> where
+    T: Lobe<Message=M, Role=R>,
     M: 'static,
-    C: Copy + Clone + Eq + PartialEq + 'static,
+    R: Copy + Clone + Eq + PartialEq + 'static,
 {
     let (queue_tx, queue_rx) = mpsc::channel(100);
     let mut core = reactor::Core::new()?;
@@ -40,7 +40,7 @@ pub fn run<T, M, C>(lobe: T) -> Result<()> where
     let reactor = core.handle();
 
     let sender_tx = queue_tx.clone();
-    let sender: Rc<Fn(&reactor::Handle, Protocol<M, C>)> = Rc::from(
+    let sender: Rc<Fn(&reactor::Handle, Protocol<M, R>)> = Rc::from(
         move |r: &reactor::Handle, msg| r.spawn(
              sender_tx.clone()
                 .send(msg)
@@ -84,11 +84,11 @@ pub fn run<T, M, C>(lobe: T) -> Result<()> where
                 Protocol::Init(effector) => node.update(
                     Protocol::Init(effector)
                 ),
-                Protocol::AddInput(input, constraint) => node.update(
-                    Protocol::AddInput(input, constraint)
+                Protocol::AddInput(input, role) => node.update(
+                    Protocol::AddInput(input, role)
                 ),
-                Protocol::AddOutput(output, constraint) => node.update(
-                    Protocol::AddOutput(output, constraint)
+                Protocol::AddOutput(output, role) => node.update(
+                    Protocol::AddOutput(output, role)
                 ),
 
                 Protocol::Start => node.update(Protocol::Start),
