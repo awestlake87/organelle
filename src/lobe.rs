@@ -36,7 +36,7 @@ pub fn run<T, M, R>(lobe: T) -> Result<()> where
     let (queue_tx, queue_rx) = mpsc::channel(100);
     let mut core = reactor::Core::new()?;
 
-    let handle = Handle::new_v4();
+    let main_lobe = Handle::new_v4();
     let reactor = core.handle();
 
     let sender_tx = queue_tx.clone();
@@ -56,7 +56,7 @@ pub fn run<T, M, R>(lobe: T) -> Result<()> where
             .send(
                 Protocol::Init(
                     Effector {
-                        handle: handle,
+                        this_lobe: main_lobe,
                         sender: Rc::clone(&sender),
                         reactor: reactor,
                     }
@@ -95,7 +95,7 @@ pub fn run<T, M, R>(lobe: T) -> Result<()> where
 
                 Protocol::Payload(src, dest, msg) => {
                     // messages should only be sent to our main lobe
-                    assert_eq!(dest, handle);
+                    assert_eq!(dest, main_lobe);
 
                     node.update(Protocol::Message(src, msg))
                 },

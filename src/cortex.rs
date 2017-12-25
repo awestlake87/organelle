@@ -113,7 +113,7 @@ impl<M, R> Cortex<M, R> where
         self.connections.push((input, output, role));
     }
 
-    /// get the input lobe's handle
+    /// get the main lobe's handle
     pub fn get_main_handle(&self) -> Handle {
         self.main_hdl
     }
@@ -136,13 +136,13 @@ impl<M, R> Cortex<M, R> where
         R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
         U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq,
     {
-        let cortex_hdl = effector.handle;
+        let cortex_hdl = effector.this_lobe;
 
         let (queue_tx, queue_rx) = mpsc::channel(100);
 
         self.effector = Some(
             Effector {
-                handle: cortex_hdl.clone(),
+                this_lobe: cortex_hdl.clone(),
                 sender: Rc::from(
                     move |r: &reactor::Handle, msg: Protocol<M, R>| r.spawn(
                         queue_tx.clone().send(msg)
@@ -177,7 +177,7 @@ impl<M, R> Cortex<M, R> where
             main_hdl,
             Protocol::Init(
                 Effector {
-                    handle: main_hdl,
+                    this_lobe: main_hdl,
                     sender: sender.clone(),
                     reactor: reactor.clone(),
                 }
@@ -188,7 +188,7 @@ impl<M, R> Cortex<M, R> where
             node.update(
                 Protocol::Init(
                     Effector {
-                        handle: *hdl,
+                        this_lobe: *hdl,
                         sender: sender.clone(),
                         reactor: reactor.clone(),
                     }

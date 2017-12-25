@@ -95,7 +95,7 @@ impl<M, R> Protocol<M, R> where
 
                 Protocol::Init(
                     Effector {
-                        handle: effector.handle,
+                        this_lobe: effector.this_lobe,
                         sender: Rc::from(
                             move |effector: &reactor::Handle, msg| sender(
                                 effector,
@@ -137,9 +137,9 @@ impl<M, R> Protocol<M, R> where
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
 pub struct Effector<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
-    handle:     Handle,
-    sender:     Rc<Fn(&reactor::Handle, Protocol<M, R>)>,
-    reactor:    reactor::Handle,
+    this_lobe:      Handle,
+    sender:         Rc<Fn(&reactor::Handle, Protocol<M, R>)>,
+    reactor:        reactor::Handle,
 }
 
 impl<M, R> Clone for Effector<M, R> where
@@ -148,7 +148,7 @@ impl<M, R> Clone for Effector<M, R> where
 {
     fn clone(&self) -> Self {
         Self {
-            handle: self.handle,
+            this_lobe: self.this_lobe,
             sender: Rc::clone(&self.sender),
             reactor: self.reactor.clone(),
         }
@@ -160,14 +160,14 @@ impl<M, R> Effector<M, R> where
     R: Copy + Clone + Eq + PartialEq + 'static,
 {
     /// get the Handle associated with the lobe that owns this effector
-    pub fn handle(&self) -> Handle {
-        self.handle
+    pub fn this_lobe(&self) -> Handle {
+        self.this_lobe
     }
 
     /// send a message to dest lobe
     pub fn send(&self, dest: Handle, msg: M) {
         self.send_cortex_message(
-            Protocol::Payload(self.handle(), dest, msg)
+            Protocol::Payload(self.this_lobe(), dest, msg)
         );
     }
 
@@ -217,20 +217,20 @@ impl<L, M, R> LobeWrapper<L, M, R> where
     }
 }
 
-impl<L, IM, OM, IC, OC> Node<OM, OC> for LobeWrapper<L, IM, IC> where
-    L: Lobe<Message=IM, Role=IC>,
+impl<L, IM, OM, IR, OR> Node<OM, OR> for LobeWrapper<L, IM, IR> where
+    L: Lobe<Message=IM, Role=IR>,
 
     IM: From<OM> + Into<OM> + 'static,
     OM: From<IM> + Into<IM> + 'static,
 
-    IC: From<OC> + Into<OC> + Copy + Clone + Eq + PartialEq + 'static,
-    OC: From<IC> + Into<IC> + Copy + Clone + Eq + PartialEq + 'static,
+    IR: From<OR> + Into<OR> + Copy + Clone + Eq + PartialEq + 'static,
+    OR: From<IR> + Into<IR> + Copy + Clone + Eq + PartialEq + 'static,
 {
-    fn update(&mut self, msg: Protocol<OM, OC>) -> Result<()> {
+    fn update(&mut self, msg: Protocol<OM, OR>) -> Result<()> {
         if self.0.is_some() {
             let lobe = mem::replace(&mut self.0, None)
                 .unwrap()
-                .update(Protocol::<IM, IC>::convert_protocol(msg))?
+                .update(Protocol::<IM, IR>::convert_protocol(msg))?
             ;
 
             self.0 = Some(lobe);

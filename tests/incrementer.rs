@@ -73,7 +73,7 @@ impl Lobe for IncrementerLobe {
     fn update(mut self, msg: IncrementerProtocol) -> Result<Self> {
         match msg {
             Protocol::Init(effector) => {
-                println!("incrementer: {}", effector.handle());
+                println!("incrementer: {}", effector.this_lobe());
                 self.effector = Some(effector);
             },
             Protocol::AddOutput(output, role) => {
@@ -189,7 +189,7 @@ impl Lobe for CounterLobe {
     {
         match msg {
             Protocol::Init(effector) => {
-                println!("counter: {}", effector.handle());
+                println!("counter: {}", effector.this_lobe());
                 self.effector = Some(effector);
             },
             Protocol::AddInput(input, role) => {
@@ -252,7 +252,7 @@ impl Lobe for ForwarderLobe {
     {
         match msg {
             Protocol::Init(effector) => {
-                println!("forwarder: {}", effector.handle());
+                println!("forwarder: {}", effector.this_lobe());
                 self.effector = Some(effector);
             },
             Protocol::AddInput(input, role) => {
@@ -279,7 +279,7 @@ impl Lobe for ForwarderLobe {
                     println!(
                         "forwarding input {:#?} through {}",
                         msg,
-                        self.effector().handle()
+                        self.effector().this_lobe()
                     );
 
                     self.effector().send(self.output.unwrap(), msg);
@@ -288,7 +288,7 @@ impl Lobe for ForwarderLobe {
                     println!(
                         "forwarding output {:#?} through {}",
                         msg,
-                        self.effector().handle()
+                        self.effector().this_lobe()
                     );
 
                     self.effector().send(self.input.unwrap(), msg);
