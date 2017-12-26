@@ -42,8 +42,6 @@ type IncrementerSoma = Soma<IncrementerMessage, IncrementerRole>;
 
 struct IncrementerLobe {
     soma:       IncrementerSoma,
-
-    output:     Option<Handle>,
 }
 
 impl IncrementerLobe {
@@ -56,8 +54,6 @@ impl IncrementerLobe {
                         Constraint::RequireOne(IncrementerRole::Incrementer)
                     ]
                 )?,
-
-                output: None,
             }
         )
     }
@@ -80,27 +76,17 @@ impl Lobe for IncrementerLobe {
                 println!(
                     "incrementer output {} {:#?}", output, role
                 );
-
-                assert!(role == IncrementerRole::Incrementer);
-
-                self.output = Some(output);
             },
 
             Protocol::Start => {
-                if let Some(output) = self.output {
-                    self.soma.send(output, IncrementerMessage::Increment)?;
-                }
-                else {
-                    self.soma.stop()?;
-                }
+                self.soma.send_req_output(
+                    IncrementerRole::Incrementer, IncrementerMessage::Increment
+                )?;
             },
 
-            Protocol::Message(src, IncrementerMessage::Ack) => {
-                assert_eq!(src, self.output.unwrap());
-                println!("ACK");
-
-                self.soma.send(
-                    self.output.unwrap(), IncrementerMessage::Increment
+            Protocol::Message(_, IncrementerMessage::Ack) => {
+                self.soma.send_req_output(
+                    IncrementerRole::Incrementer, IncrementerMessage::Increment
                 )?;
             },
 
@@ -148,8 +134,6 @@ type CounterSoma = Soma<CounterMessage, CounterRole>;
 struct CounterLobe {
     soma: CounterSoma,
 
-    input: Option<Handle>,
-
     counter: u32
 }
 
@@ -161,8 +145,6 @@ impl CounterLobe {
                     vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
                     vec![ ]
                 )?,
-
-                input: None,
 
                 counter: 0
             }
@@ -185,24 +167,20 @@ impl Lobe for CounterLobe {
             },
             Protocol::AddInput(input, role) => {
                 println!("counter input {} {:#?}", input, role);
-
-                assert!(role == CounterRole::Incrementer);
-
-                self.input = Some(input);
             },
 
-            Protocol::Message(src, CounterMessage::BumpCounter) => {
-                assert_eq!(src, self.input.unwrap());
-
+            Protocol::Message(_, CounterMessage::BumpCounter) => {
                 if self.counter < 5 {
                     println!("counter increment");
 
                     self.counter += 1;
-                    self.soma.send(self.input.unwrap(), CounterMessage::Ack)?;
+                    self.soma.send_req_input(
+                        CounterRole::Incrementer, CounterMessage::Ack
+                    )?;
                 }
                 else {
                     println!("stop");
-                    self.soma.stop()?;
+                    self.soma.effector()?.stop();
                 }
             },
 
@@ -215,9 +193,6 @@ impl Lobe for CounterLobe {
 
 struct ForwarderLobe {
     soma: CounterSoma,
-
-    input: Option<Handle>,
-    output: Option<Handle>,
 }
 
 impl ForwarderLobe {
@@ -228,8 +203,6 @@ impl ForwarderLobe {
                     vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
                     vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
                 )?,
-                input: None,
-                output: None,
             }
         )
     }
@@ -248,37 +221,33 @@ impl Lobe for ForwarderLobe {
             Protocol::Init(effector) => {
                 println!("forwarder: {}", effector.this_lobe());
             },
-            Protocol::AddInput(input, role) => {
-                assert!(role == CounterRole::Incrementer);
-
+            Protocol::AddInput(input, _) => {
                 println!("forwarder input: {}", input);
-                self.input = Some(input);
             },
-            Protocol::AddOutput(output, role) => {
-                assert!(role == CounterRole::Incrementer);
-
+            Protocol::AddOutput(output, _) => {
                 println!("forwarder output: {}", output);
-                self.output = Some(output);
             },
 
             Protocol::Message(src, msg) => {
-                if src == self.input.unwrap() {
+                if src == self.soma.req_input(CounterRole::Incrementer)? {
                     println!(
                         "forwarding input {:#?} through {}",
                         msg,
                         self.soma.effector()?.this_lobe()
                     );
 
-                    self.soma.send(self.output.unwrap(), msg)?;
+                    self.soma.send_req_output(CounterRole::Incrementer, msg)?;
                 }
-                else if src == self.output.unwrap() {
+                else if
+                    src == self.soma.req_output(CounterRole::Incrementer)?
+                {
                     println!(
                         "forwarding output {:#?} through {}",
                         msg,
                         self.soma.effector()?.this_lobe()
                     );
 
-                    self.soma.send(self.input.unwrap(), msg)?;
+                    self.soma.send_req_input(CounterRole::Incrementer, msg)?;
                 }
             },
 

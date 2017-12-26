@@ -40,8 +40,9 @@ impl Lobe for GiveSomethingLobe {
 
         match msg {
             Protocol::Start => {
-                let output = self.soma.req_output(TestRole::Something)?;
-                self.soma.send(output, TestMessage::Something)?
+                self.soma.send_req_output(
+                    TestRole::Something, TestMessage::Something
+                )?
             },
             _ => (),
         }
@@ -78,7 +79,7 @@ impl Lobe for TakeSomethingLobe {
 
         match msg {
             Protocol::Message(_, TestMessage::Something) => {
-                self.soma.stop()?;
+                self.soma.effector()?.stop();
             },
 
             _ => (),

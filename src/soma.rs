@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use futures::prelude::*;
-
-use super::{ Result, Error, Protocol, Effector, Handle };
+use super::{ Result, Protocol, Effector, Handle };
 
 /// defines constraints on how connections can be made
 #[derive(Debug, Copy, Clone)]
@@ -120,38 +118,20 @@ impl<M, R> Soma<M, R> where
             )
         }
     }
+    /// convenience function for sending messages by role
+    pub fn send_req_input(&self, dest: R, msg: M) -> Result<()> {
+        let req_input = self.req_input(dest)?;
 
-    /// convenience function to get the lobe handle for the current lobe
-    pub fn this_lobe(&self) -> Result<Handle> {
-        Ok(self.effector()?.this_lobe())
-    }
-
-    /// convenience function for sending messages
-    pub fn send(&self, dest: Handle, msg: M) -> Result<()> {
-        self.effector()?.send(dest, msg);
+        self.effector()?.send(req_input, msg);
 
         Ok(())
     }
 
-    /// convenience function for stopping the cortex
-    pub fn stop(&self) -> Result<()> {
-        self.effector()?.stop();
+    /// convenience function for sending messages by role
+    pub fn send_req_output(&self, dest: R, msg: M) -> Result<()> {
+        let req_output = self.req_output(dest)?;
 
-        Ok(())
-    }
-
-    /// convenience function for stopping the cortex with an error
-    pub fn error(&self, e: Error) -> Result<()> {
-        self.effector()?.error(e);
-
-        Ok(())
-    }
-
-    /// convenience function to spawn a future on the reactor
-    pub fn spawn<F>(&self, future: F) -> Result<()> where
-        F: Future<Item=(), Error=()> + 'static
-    {
-        self.effector()?.spawn(future);
+        self.effector()?.send(req_output, msg);
 
         Ok(())
     }
