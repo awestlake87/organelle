@@ -12,10 +12,14 @@ pub enum Constraint<R> where
 {
     /// require one connection with the specified role
     RequireOne(R),
+
+    /// require any number of connections with the specified role
+    Variadic(R),
 }
 
 enum ConstraintHandle {
     One(Handle),
+    Many(Vec<Handle>),
     Empty,
 }
 
@@ -134,9 +138,19 @@ impl<M, R> Soma<M, R> where
         Self::get_req(&self.inputs, role)
     }
 
+    /// get a Variadic input
+    pub fn var_input(&self, role: R) -> Result<&Vec<Handle>> {
+        Self::get_var(&self.inputs, role)
+    }
+
     /// get a RequireOne output
     pub fn req_output(&self, role: R) -> Result<Handle> {
         Self::get_req(&self.outputs, role)
+    }
+
+    /// get a Variadic output
+    pub fn var_output(&self, role: R) -> Result<&Vec<Handle>> {
+        Self::get_var(&self.outputs, role)
     }
 
     fn create_roles(constraints: Vec<Constraint<R>>)
@@ -145,20 +159,22 @@ impl<M, R> Soma<M, R> where
         let mut map = HashMap::new();
 
         for c in constraints {
-            match c {
-                Constraint::RequireOne(role) => {
-                    let result = map.insert(
-                        role,
-                        (
-                            ConstraintHandle::Empty,
-                            Constraint::RequireOne(role)
-                        )
-                    );
+            let result = match c {
+                Constraint::RequireOne(role) => map.insert(
+                    role,
+                    (ConstraintHandle::Empty, Constraint::RequireOne(role))
+                ),
+                Constraint::Variadic(role) => map.insert(
+                    role,
+                    (
+                        ConstraintHandle::Many(vec![ ]),
+                        Constraint::Variadic(role)
+                    )
+                )
+            };
 
-                    if result.is_some() {
-                        bail!("role {:?} specified more than once")
-                    }
-                }
+            if result.is_some() {
+                bail!("role {:?} specified more than once")
             }
         }
 
@@ -171,20 +187,29 @@ impl<M, R> Soma<M, R> where
         if let Some(&mut (ref mut handle, ref constraint))
             = map.get_mut(&role)
         {
-            let new_hdl = match *constraint {
-                Constraint::RequireOne(role) => match handle {
-                    &mut ConstraintHandle::Empty => {
-                        ConstraintHandle::One(lobe)
+            match *constraint {
+                Constraint::RequireOne(role) => {
+                    let new_hdl = match handle {
+                        &mut ConstraintHandle::Empty => {
+                            ConstraintHandle::One(lobe)
+                        },
+
+                        _ => bail!(
+                            "only one lobe can be assigned to role {:?}",
+                            role
+                        ),
+                    };
+
+                    *handle = new_hdl;
+                },
+                Constraint::Variadic(role) => match handle {
+                    &mut ConstraintHandle::Many(ref mut lobes) => {
+                        lobes.push(lobe);
                     },
 
-                    _ => bail!(
-                        "only one lobe can be assigned to role {:?}",
-                        role
-                    ),
+                    _ => unreachable!("role {:?} was configured wrong", role)
                 }
             };
-
-            *handle = new_hdl;
 
             Ok(())
         }
@@ -203,7 +228,8 @@ impl<M, R> Soma<M, R> where
                         role,
                         *constraint
                     )
-                }
+                },
+                Constraint::Variadic(_) => (),
             }
         }
 
@@ -211,8 +237,7 @@ impl<M, R> Soma<M, R> where
     }
 
     fn get_req(map: &ConstraintMap<R>, role: R) -> Result<Handle> {
-        if let Some(&(ref handle, Constraint::RequireOne(_)))
-            = map.get(&role)
+        if let Some(&(ref handle, Constraint::RequireOne(_))) = map.get(&role)
         {
             match handle {
                 &ConstraintHandle::One(ref lobe) => Ok(*lobe),
@@ -220,7 +245,19 @@ impl<M, R> Soma<M, R> where
             }
         }
         else {
-            bail!("unable to find role {:?}", role)
+            bail!("unexpected role {:?}", role)
+        }
+    }
+
+    fn get_var(map: &ConstraintMap<R>, role: R) -> Result<&Vec<Handle>> {
+        if let Some(&(ref handle, Constraint::Variadic(_))) = map.get(&role) {
+            match handle {
+                &ConstraintHandle::Many(ref lobes) => Ok(lobes),
+                _ => unreachable!("role {:?} was configured wrong")
+            }
+        }
+        else {
+            bail!("unexpected role {:?}", role)
         }
     }
 }
