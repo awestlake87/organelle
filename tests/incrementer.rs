@@ -12,16 +12,6 @@ enum IncrementerMessage {
     Ack,
 }
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum IncrementerRole {
-    Incrementer,
-    Forwarder,
-    Counter,
-}
-
-type IncrementerEffector = Effector<IncrementerMessage, IncrementerRole>;
-type IncrementerProtocol = Protocol<IncrementerMessage, IncrementerRole>;
-
 impl From<CounterMessage> for IncrementerMessage {
     fn from(msg: CounterMessage) -> IncrementerMessage {
         match msg {
@@ -33,36 +23,36 @@ impl From<CounterMessage> for IncrementerMessage {
     }
 }
 
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+enum IncrementerRole {
+    Incrementer,
+    Counter,
+}
+
 impl From<CounterRole> for IncrementerRole {
     fn from(c: CounterRole) -> IncrementerRole {
         match c {
-            CounterRole::Incrementer => {
-                IncrementerRole::Incrementer
-            },
-            CounterRole::Forwarder => {
-                IncrementerRole::Forwarder
-            },
+            CounterRole::Incrementer => IncrementerRole::Incrementer,
             CounterRole::Counter => IncrementerRole::Counter,
         }
     }
 }
 
-struct IncrementerLobe {
-    effector: Option<IncrementerEffector>,
+type IncrementerSoma = Soma<IncrementerMessage, IncrementerRole>;
 
-    output: Option<Handle>,
+struct IncrementerLobe {
+    soma:       IncrementerSoma,
+
+    output:     Option<Handle>,
 }
 
 impl IncrementerLobe {
     fn new() -> Self {
         Self {
-            effector: None,
+            soma: IncrementerSoma::new(),
+
             output: None,
         }
-    }
-
-    fn effector(&self) -> &IncrementerEffector {
-        self.effector.as_ref().unwrap()
     }
 }
 
@@ -70,33 +60,31 @@ impl Lobe for IncrementerLobe {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
 
-    fn update(mut self, msg: IncrementerProtocol) -> Result<Self> {
+    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+        -> Result<Self>
+    {
+        self.soma.update(&msg)?;
+
         match msg {
             Protocol::Init(effector) => {
                 println!("incrementer: {}", effector.this_lobe());
-                self.effector = Some(effector);
             },
             Protocol::AddOutput(output, role) => {
                 println!(
                     "incrementer output {} {:#?}", output, role
                 );
 
-                assert!(
-                    role == IncrementerRole::Incrementer
-                    || role == IncrementerRole::Forwarder
-                );
+                assert!(role == IncrementerRole::Incrementer);
 
                 self.output = Some(output);
             },
 
             Protocol::Start => {
                 if let Some(output) = self.output {
-                    self.effector().send(
-                        output, IncrementerMessage::Increment
-                    );
+                    self.soma.send(output, IncrementerMessage::Increment)?;
                 }
                 else {
-                    self.effector().stop();
+                    self.soma.stop()?;
                 }
             },
 
@@ -104,9 +92,9 @@ impl Lobe for IncrementerLobe {
                 assert_eq!(src, self.output.unwrap());
                 println!("ACK");
 
-                self.effector().send(
+                self.soma.send(
                     self.output.unwrap(), IncrementerMessage::Increment
-                );
+                )?;
             },
 
             _ => (),
@@ -122,16 +110,6 @@ enum CounterMessage {
     Ack,
 }
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum CounterRole {
-    Incrementer,
-    Forwarder,
-    Counter,
-}
-
-type CounterEffector = Effector<CounterMessage, CounterRole>;
-type CounterProtocol = Protocol<CounterMessage, CounterRole>;
-
 impl From<IncrementerMessage> for CounterMessage {
     fn from(msg: IncrementerMessage) -> CounterMessage {
         match msg {
@@ -143,24 +121,25 @@ impl From<IncrementerMessage> for CounterMessage {
     }
 }
 
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+enum CounterRole {
+    Incrementer,
+    Counter,
+}
+
 impl From<IncrementerRole> for CounterRole {
     fn from(role: IncrementerRole) -> CounterRole {
         match role {
-            IncrementerRole::Incrementer => {
-                CounterRole::Incrementer
-            },
-            IncrementerRole::Forwarder => {
-                CounterRole::Forwarder
-            },
-            IncrementerRole::Counter => {
-                CounterRole::Counter
-            },
+            IncrementerRole::Incrementer => CounterRole::Incrementer,
+            IncrementerRole::Counter => CounterRole::Counter,
         }
     }
 }
 
+type CounterSoma = Soma<CounterMessage, CounterRole>;
+
 struct CounterLobe {
-    effector: Option<CounterEffector>,
+    soma: CounterSoma,
 
     input: Option<Handle>,
 
@@ -170,14 +149,12 @@ struct CounterLobe {
 impl CounterLobe {
     fn new() -> Self {
         Self {
-            effector: None,
+            soma: CounterSoma::new(),
+
             input: None,
+
             counter: 0
         }
-    }
-
-    fn effector(&self) -> &CounterEffector {
-        self.effector.as_ref().unwrap()
     }
 }
 
@@ -185,20 +162,20 @@ impl Lobe for CounterLobe {
     type Message = CounterMessage;
     type Role = CounterRole;
 
-    fn update(mut self, msg: CounterProtocol) -> Result<Self>
+    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+        -> Result<Self>
     {
+        self.soma.update(&msg)?;
+
         match msg {
             Protocol::Init(effector) => {
                 println!("counter: {}", effector.this_lobe());
-                self.effector = Some(effector);
             },
             Protocol::AddInput(input, role) => {
                 println!("counter input {} {:#?}", input, role);
 
-                assert!(
-                    role == CounterRole::Incrementer
-                    || role == CounterRole::Forwarder
-                );
+                assert!(role == CounterRole::Incrementer);
+
                 self.input = Some(input);
             },
 
@@ -209,13 +186,11 @@ impl Lobe for CounterLobe {
                     println!("counter increment");
 
                     self.counter += 1;
-                    self.effector().send(
-                        self.input.unwrap(), CounterMessage::Ack
-                    );
+                    self.soma.send(self.input.unwrap(), CounterMessage::Ack)?;
                 }
                 else {
                     println!("stop");
-                    self.effector().stop();
+                    self.soma.stop()?;
                 }
             },
 
@@ -227,7 +202,7 @@ impl Lobe for CounterLobe {
 }
 
 struct ForwarderLobe {
-    effector: Option<Effector<CounterMessage, CounterRole>>,
+    soma: CounterSoma,
 
     input: Option<Handle>,
     output: Option<Handle>,
@@ -235,11 +210,7 @@ struct ForwarderLobe {
 
 impl ForwarderLobe {
     fn new() -> Self {
-        Self { effector: None, input: None, output: None }
-    }
-
-    fn effector(&self) -> &Effector<CounterMessage, CounterRole> {
-        self.effector.as_ref().unwrap()
+        Self { soma: CounterSoma::new(), input: None, output: None }
     }
 }
 
@@ -250,25 +221,20 @@ impl Lobe for ForwarderLobe {
     fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
+        self.soma.update(&msg)?;
+
         match msg {
             Protocol::Init(effector) => {
                 println!("forwarder: {}", effector.this_lobe());
-                self.effector = Some(effector);
             },
             Protocol::AddInput(input, role) => {
-                assert!(
-                    role == CounterRole::Incrementer
-                    || role == CounterRole::Forwarder
-                );
+                assert!(role == CounterRole::Incrementer);
 
                 println!("forwarder input: {}", input);
                 self.input = Some(input);
             },
             Protocol::AddOutput(output, role) => {
-                assert!(
-                    role == CounterRole::Counter
-                    || role == CounterRole::Forwarder
-                );
+                assert!(role == CounterRole::Incrementer);
 
                 println!("forwarder output: {}", output);
                 self.output = Some(output);
@@ -279,19 +245,19 @@ impl Lobe for ForwarderLobe {
                     println!(
                         "forwarding input {:#?} through {}",
                         msg,
-                        self.effector().this_lobe()
+                        self.soma.effector()?.this_lobe()
                     );
 
-                    self.effector().send(self.output.unwrap(), msg);
+                    self.soma.send(self.output.unwrap(), msg)?;
                 }
                 else if src == self.output.unwrap() {
                     println!(
                         "forwarding output {:#?} through {}",
                         msg,
-                        self.effector().this_lobe()
+                        self.soma.effector()?.this_lobe()
                     );
 
-                    self.effector().send(self.input.unwrap(), msg);
+                    self.soma.send(self.input.unwrap(), msg)?;
                 }
             },
 
@@ -322,7 +288,7 @@ fn test_sub_cortex() {
     let forwarder = counter_cortex.get_main_handle();
     let counter = counter_cortex.add_lobe(CounterLobe::new());
 
-    counter_cortex.connect(forwarder, counter, CounterRole::Forwarder);
+    counter_cortex.connect(forwarder, counter, CounterRole::Incrementer);
 
     let mut inc_cortex = Cortex::new(IncrementerLobe::new());
 
@@ -344,9 +310,7 @@ impl Lobe for InitErrorLobe {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
 
-    fn update(self, msg: IncrementerProtocol)
-        -> Result<Self>
-    {
+    fn update(self, msg: Protocol<Self::Message, Self::Role>) -> Result<Self> {
         match msg {
             Protocol::Init(effector) => {
                 effector.error("a lobe error!".into());
@@ -367,9 +331,7 @@ impl Lobe for UpdateErrorLobe {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
 
-    fn update(self, _: IncrementerProtocol)
-        -> Result<Self>
-    {
+    fn update(self, _: Protocol<Self::Message, Self::Role>) -> Result<Self> {
         bail!("update failed")
     }
 }

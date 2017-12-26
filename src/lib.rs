@@ -12,9 +12,11 @@ extern crate uuid;
 
 mod cortex;
 mod lobe;
+mod soma;
 
 pub use cortex::{ Cortex };
 pub use lobe::{ Lobe, run };
+pub use soma::{ Soma };
 
 use std::marker::PhantomData;
 use std::mem;
