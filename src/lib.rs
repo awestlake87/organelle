@@ -16,8 +16,10 @@ mod soma;
 
 pub use cortex::{ Cortex };
 pub use lobe::{ Lobe, run };
-pub use soma::{ Soma };
+pub use soma::{ Soma, Constraint };
 
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
 use std::rc::Rc;
@@ -55,7 +57,10 @@ pub type Handle = Uuid;
 /// 4. any messages sent between lobes will come through Message
 /// 5. when a lobe determines that the cortex should stop, it can issue Stop
 ///     and the cortex will exit its event loop.
-pub enum Protocol<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
+pub enum Protocol<M, R> where
+    M: 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+{
     /// initializes a lobe with an effector to use
     Init(Effector<M, R>),
     /// add an input Handle with connection role
@@ -81,15 +86,32 @@ pub enum Protocol<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
 
 impl<M, R> Protocol<M, R> where
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     fn convert_protocol<T, U>(msg: Protocol<T, U>) -> Self
         where
             M: From<T> + Into<T> + 'static,
             T: From<M> + Into<M> + 'static,
 
-            R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq + 'static,
-            U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq + 'static,
+            R: From<U>
+                + Into<U>
+                + Debug
+                + Copy
+                + Clone
+                + Hash
+                + Eq
+                + PartialEq
+                + 'static,
+
+            U: From<R>
+                + Into<R>
+                + Debug
+                + Copy
+                + Clone
+                + Hash
+                + Eq
+                + PartialEq
+                + 'static,
     {
         match msg {
             Protocol::Init(effector) => {
@@ -138,7 +160,10 @@ impl<M, R> Protocol<M, R> where
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
-pub struct Effector<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
+pub struct Effector<M, R> where
+    M: 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
+{
     this_lobe:      Handle,
     sender:         Rc<Fn(&reactor::Handle, Protocol<M, R>)>,
     reactor:        reactor::Handle,
@@ -146,7 +171,7 @@ pub struct Effector<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
 
 impl<M, R> Clone for Effector<M, R> where
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -159,7 +184,7 @@ impl<M, R> Clone for Effector<M, R> where
 
 impl<M, R> Effector<M, R> where
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     /// get the Handle associated with the lobe that owns this effector
     pub fn this_lobe(&self) -> Handle {
@@ -200,7 +225,10 @@ impl<M, R> Effector<M, R> where
     }
 }
 
-trait Node<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
+trait Node<M, R> where
+    M: 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+{
     fn update(&mut self, msg: Protocol<M, R>) -> Result<()>;
 }
 
@@ -210,7 +238,7 @@ impl<L, M, R> LobeWrapper<L, M, R> where
     L: Lobe<Message=M, Role=R>,
 
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
 {
     fn new(lobe: L) -> Self {
         LobeWrapper::<L, M, R>(
@@ -225,8 +253,25 @@ impl<L, IM, OM, IR, OR> Node<OM, OR> for LobeWrapper<L, IM, IR> where
     IM: From<OM> + Into<OM> + 'static,
     OM: From<IM> + Into<IM> + 'static,
 
-    IR: From<OR> + Into<OR> + Copy + Clone + Eq + PartialEq + 'static,
-    OR: From<IR> + Into<IR> + Copy + Clone + Eq + PartialEq + 'static,
+    IR: From<OR>
+        + Into<OR>
+        + Debug
+        + Copy
+        + Clone
+        + Hash
+        + Eq
+        + PartialEq
+        + 'static,
+
+    OR: From<IR>
+        + Into<IR>
+        + Debug
+        + Copy
+        + Clone
+        + Hash
+        + Eq
+        + PartialEq
+        + 'static,
 {
     fn update(&mut self, msg: Protocol<OM, OR>) -> Result<()> {
         if self.0.is_some() {

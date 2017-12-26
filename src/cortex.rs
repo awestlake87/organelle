@@ -1,6 +1,8 @@
 
 use std::cell::{ RefCell };
 use std::collections::{ HashMap };
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use futures::prelude::*;
@@ -33,7 +35,10 @@ struct CortexNodePool<M, R> {
 ///
 /// any cortex can be plugged into any other cortex provided their messages and
 /// constraints can convert between each other using From and Into
-pub struct Cortex<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
+pub struct Cortex<M, R> where
+    M: 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
+{
     effector:       Option<Effector<M, R>>,
 
     main_hdl:       Handle,
@@ -44,7 +49,7 @@ pub struct Cortex<M: 'static, R: Copy + Clone + Eq + PartialEq + 'static> {
 
 impl<M, R> Cortex<M, R> where
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     /// create a new cortex with input and output lobes
     pub fn new<L>(main: L) -> Self where
@@ -86,16 +91,20 @@ impl<M, R> Cortex<M, R> where
 
         R: From<L::Role>
             + Into<L::Role>
+            + Debug
             + Copy
             + Clone
+            + Hash
             + Eq
             + PartialEq
             + 'static,
 
         L::Role: From<R>
             + Into<R>
+            + Debug
             + Copy
             + Clone
+            + Hash
             + Eq
             + PartialEq
             + 'static,
@@ -133,8 +142,8 @@ impl<M, R> Cortex<M, R> where
         M: From<T> + Into<T> + 'static,
         T: From<M> + Into<M> + 'static,
 
-        R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
-        U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq,
+        R: From<U> + Into<U> + Debug + Copy + Clone + Hash + Eq + PartialEq,
+        U: From<R> + Into<R> + Debug + Copy + Clone + Hash + Eq + PartialEq,
     {
         let cortex_hdl = effector.this_lobe;
 
@@ -265,8 +274,23 @@ impl<M, R> Cortex<M, R> where
             M: From<T> + Into<T> + 'static,
             T: From<M> + Into<M> + 'static,
 
-            R: From<U> + Into<U> + Copy + Clone + Eq + PartialEq,
-            U: From<R> + Into<R> + Copy + Clone + Eq + PartialEq,
+            R: From<U>
+                + Into<U>
+                + Debug
+                + Copy
+                + Clone
+                + Hash
+                + Eq
+                + PartialEq,
+
+            U: From<R>
+                + Into<R>
+                + Debug
+                + Copy
+                + Clone
+                + Hash
+                + Eq
+                + PartialEq,
     {
         match msg {
             Protocol::Payload(src, dest, msg) => {
@@ -324,7 +348,7 @@ impl<M, R> Cortex<M, R> where
 
 impl<M, R> Lobe for Cortex<M, R> where
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     type Message = M;
     type Role = R;

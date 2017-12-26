@@ -1,4 +1,6 @@
 
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use futures::prelude::*;
@@ -17,7 +19,7 @@ pub trait Lobe: Sized {
     /// user-defined message to be passed between lobes
     type Message: 'static;
     /// user-defined roles for connections
-    type Role: Copy + Clone + Eq + PartialEq + 'static;
+    type Role: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static;
 
     /// apply any changes to the lobe's state as a result of _msg
     fn update(self, _msg: Protocol<Self::Message, Self::Role>)
@@ -31,7 +33,7 @@ pub trait Lobe: Sized {
 pub fn run<T, M, R>(lobe: T) -> Result<()> where
     T: Lobe<Message=M, Role=R>,
     M: 'static,
-    R: Copy + Clone + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     let (queue_tx, queue_rx) = mpsc::channel(100);
     let mut core = reactor::Core::new()?;

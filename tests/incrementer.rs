@@ -47,12 +47,19 @@ struct IncrementerLobe {
 }
 
 impl IncrementerLobe {
-    fn new() -> Self {
-        Self {
-            soma: IncrementerSoma::new(),
+    fn new() -> Result<Self> {
+        Ok(
+            Self {
+                soma: IncrementerSoma::new(
+                    vec![ ],
+                    vec![
+                        Constraint::RequireOne(IncrementerRole::Incrementer)
+                    ]
+                )?,
 
-            output: None,
-        }
+                output: None,
+            }
+        )
     }
 }
 
@@ -147,14 +154,19 @@ struct CounterLobe {
 }
 
 impl CounterLobe {
-    fn new() -> Self {
-        Self {
-            soma: CounterSoma::new(),
+    fn new() -> Result<Self> {
+        Ok(
+            Self {
+                soma: CounterSoma::new(
+                    vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
+                    vec![ ]
+                )?,
 
-            input: None,
+                input: None,
 
-            counter: 0
-        }
+                counter: 0
+            }
+        )
     }
 }
 
@@ -209,8 +221,17 @@ struct ForwarderLobe {
 }
 
 impl ForwarderLobe {
-    fn new() -> Self {
-        Self { soma: CounterSoma::new(), input: None, output: None }
+    fn new() -> Result<Self> {
+        Ok(
+            Self {
+                soma: CounterSoma::new(
+                    vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
+                    vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
+                )?,
+                input: None,
+                output: None,
+            }
+        )
     }
 }
 
@@ -270,9 +291,9 @@ impl Lobe for ForwarderLobe {
 
 #[test]
 fn test_cortex() {
-    let mut cortex = Cortex::new(IncrementerLobe::new());
+    let mut cortex = Cortex::new(IncrementerLobe::new().unwrap());
 
-    let counter = cortex.add_lobe(CounterLobe::new());
+    let counter = cortex.add_lobe(CounterLobe::new().unwrap());
 
     let main = cortex.get_main_handle();
     println!("cortex {}", main);
@@ -283,14 +304,14 @@ fn test_cortex() {
 
 #[test]
 fn test_sub_cortex() {
-    let mut counter_cortex = Cortex::new(ForwarderLobe::new());
+    let mut counter_cortex = Cortex::new(ForwarderLobe::new().unwrap());
 
     let forwarder = counter_cortex.get_main_handle();
-    let counter = counter_cortex.add_lobe(CounterLobe::new());
+    let counter = counter_cortex.add_lobe(CounterLobe::new().unwrap());
 
     counter_cortex.connect(forwarder, counter, CounterRole::Incrementer);
 
-    let mut inc_cortex = Cortex::new(IncrementerLobe::new());
+    let mut inc_cortex = Cortex::new(IncrementerLobe::new().unwrap());
 
     let incrementer = inc_cortex.get_main_handle();
     let counter = inc_cortex.add_lobe(counter_cortex);
