@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::{ Result, Protocol, Effector, Handle };
+use futures::prelude::*;
+
+use super::{ Result, Error, Protocol, Effector, Handle };
 
 /// defines constraints on how connections can be made
 #[derive(Debug, Copy, Clone)]
@@ -119,6 +121,11 @@ impl<M, R> Soma<M, R> where
         }
     }
 
+    /// convenience function to get the lobe handle for the current lobe
+    pub fn this_lobe(&self) -> Result<Handle> {
+        Ok(self.effector()?.this_lobe())
+    }
+
     /// convenience function for sending messages
     pub fn send(&self, dest: Handle, msg: M) -> Result<()> {
         self.effector()?.send(dest, msg);
@@ -129,6 +136,22 @@ impl<M, R> Soma<M, R> where
     /// convenience function for stopping the cortex
     pub fn stop(&self) -> Result<()> {
         self.effector()?.stop();
+
+        Ok(())
+    }
+
+    /// convenience function for stopping the cortex with an error
+    pub fn error(&self, e: Error) -> Result<()> {
+        self.effector()?.error(e);
+
+        Ok(())
+    }
+
+    /// convenience function to spawn a future on the reactor
+    pub fn spawn<F>(&self, future: F) -> Result<()> where
+        F: Future<Item=(), Error=()> + 'static
+    {
+        self.effector()?.spawn(future);
 
         Ok(())
     }
