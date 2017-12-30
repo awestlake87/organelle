@@ -215,6 +215,11 @@ impl<M, R> Effector<M, R> where
         self.reactor.spawn(future);
     }
 
+    /// get a reactor handle
+    pub fn reactor(&self) -> reactor::Handle {
+        self.reactor.clone()
+    }
+
     /// get a reactor remote
     pub fn remote(&self) -> reactor::Remote {
         self.reactor.remote().clone()
