@@ -24,8 +24,6 @@ use std::marker::PhantomData;
 use std::mem;
 
 use futures::prelude::*;
-use futures::future::AndThen;
-use futures::sink;
 use futures::sync::mpsc;
 use tokio_core::reactor;
 use uuid::Uuid;
