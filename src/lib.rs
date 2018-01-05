@@ -22,9 +22,11 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
-use std::rc::Rc;
 
 use futures::prelude::*;
+use futures::future::AndThen;
+use futures::sink;
+use futures::sync::mpsc;
 use tokio_core::reactor;
 use uuid::Uuid;
 
@@ -117,15 +119,21 @@ impl<M, R> Protocol<M, R> where
             Protocol::Init(effector) => {
                 let sender = effector.sender;
 
+                let (tx, rx) = mpsc::channel(10);
+
+                effector.reactor.spawn(
+                    rx.for_each(move |msg| {
+                        sender.clone().send(
+                            Protocol::<T, U>::convert_protocol(msg)
+                        )
+                            .then(|_| Ok(()))
+                    })
+                );
+
                 Protocol::Init(
                     Effector {
                         this_lobe: effector.this_lobe,
-                        sender: Rc::from(
-                            move |effector: &reactor::Handle, msg| sender(
-                                effector,
-                                Protocol::<T, U>::convert_protocol(msg)
-                            )
-                        ),
+                        sender: tx,
                         reactor: effector.reactor,
                     }
                 )
@@ -165,18 +173,18 @@ pub struct Effector<M, R> where
     R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
 {
     this_lobe:      Handle,
-    sender:         Rc<Fn(&reactor::Handle, Protocol<M, R>)>,
+    sender:         mpsc::Sender<Protocol<M, R>>,
     reactor:        reactor::Handle,
 }
 
 impl<M, R> Clone for Effector<M, R> where
     M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
 {
     fn clone(&self) -> Self {
         Self {
             this_lobe: self.this_lobe,
-            sender: Rc::clone(&self.sender),
+            sender: self.sender.clone(),
             reactor: self.reactor.clone(),
         }
     }
@@ -196,6 +204,13 @@ impl<M, R> Effector<M, R> where
         self.send_cortex_message(
             Protocol::Payload(self.this_lobe(), dest, msg)
         );
+    }
+
+    /// send a batch of messages in order to dest lobe
+    pub fn batch(&self, dest: Handle, msg: M) -> Batch<M, R> {
+        let effector = self.clone();
+
+        Batch::new(effector, Protocol::Payload(self.this_lobe(), dest, msg))
     }
 
     /// stop the cortex
@@ -226,9 +241,67 @@ impl<M, R> Effector<M, R> where
     }
 
     fn send_cortex_message(&self, msg: Protocol<M, R>) {
-        (*self.sender)(&self.reactor, msg);
+        self.spawn(self.sender.clone().send(msg).then(|_| Ok(())));
     }
 }
+
+/// builds a batch of messages to be sent in order
+///
+/// after the batch is built, call spawn() on the batch to spawn the work on
+/// the event loop.
+pub struct Batch<M, R> where
+    M: 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+{
+    effector:           Effector<M, R>,
+    future:             Box<
+                            Future<
+                                Item=mpsc::Sender<Protocol<M, R>>,
+                                Error=mpsc::SendError<Protocol<M, R>>,
+                            >
+                        >,
+}
+
+impl<M, R> Batch<M, R>
+    where
+        M: 'static,
+        R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+{
+    fn new(effector: Effector<M, R>, msg: Protocol<M, R>) -> Self {
+        let future = effector.sender.clone().send(msg);
+
+        Self { effector: effector, future: Box::new(future), }
+    }
+}
+
+impl<M, R> Batch<M, R> where
+    M: 'static,
+    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
+{
+    /// send another message immediately after this one
+    pub fn then(self, dest: Handle, msg: M) -> Batch<M, R> {
+        let this_lobe = self.effector.this_lobe();
+
+        Batch {
+            effector: self.effector,
+            future: Box::new(
+                self.future
+                    .and_then(move |sender: mpsc::Sender<Protocol<M, R>>| {
+                        sender.send(
+                            Protocol::Payload(this_lobe, dest, msg)
+                        )
+                    })
+            )
+        }
+    }
+
+    /// spawn the batch on the event loop
+    pub fn spawn(self) {
+        self.effector.spawn(self.future.then(|_| Ok(())))
+    }
+}
+
+
 
 trait Node<M, R> where
     M: 'static,

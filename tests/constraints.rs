@@ -1,4 +1,7 @@
 
+#[macro_use]
+extern crate error_chain;
+
 extern crate cortical;
 
 use cortical::*;
@@ -36,15 +39,15 @@ impl Lobe for GiveSomethingLobe {
     fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
-        self.soma.update(&msg)?;
-
-        match msg {
-            Protocol::Start => {
-                self.soma.send_req_output(
-                    TestRole::Something, TestMessage::Something
-                )?
-            },
-            _ => (),
+        if let Some(msg) = self.soma.update(msg)? {
+            match msg {
+                Protocol::Start => {
+                    self.soma.send_req_output(
+                        TestRole::Something, TestMessage::Something
+                    )?;
+                },
+                _ => bail!("unexpected message"),
+            }
         }
 
         Ok(self)
@@ -75,14 +78,16 @@ impl Lobe for TakeSomethingLobe {
     fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
-        self.soma.update(&msg)?;
+        if let Some(msg) = self.soma.update(msg)? {
+            match msg {
+                Protocol::Start => (),
+                
+                Protocol::Message(_, TestMessage::Something) => {
+                    self.soma.effector()?.stop();
+                },
 
-        match msg {
-            Protocol::Message(_, TestMessage::Something) => {
-                self.soma.effector()?.stop();
-            },
-
-            _ => (),
+                _ => bail!("unexpected message"),
+            }
         }
 
         Ok(self)

@@ -66,31 +66,24 @@ impl Lobe for IncrementerLobe {
     fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
-        self.soma.update(&msg)?;
+        if let Some(msg) = self.soma.update(msg)? {
+            match msg {
+                Protocol::Start => {
+                    self.soma.send_req_output(
+                        IncrementerRole::Incrementer,
+                        IncrementerMessage::Increment
+                    )?;
+                },
 
-        match msg {
-            Protocol::Init(effector) => {
-                println!("incrementer: {}", effector.this_lobe());
-            },
-            Protocol::AddOutput(output, role) => {
-                println!(
-                    "incrementer output {} {:#?}", output, role
-                );
-            },
+                Protocol::Message(_, IncrementerMessage::Ack) => {
+                    self.soma.send_req_output(
+                        IncrementerRole::Incrementer,
+                        IncrementerMessage::Increment
+                    )?;
+                },
 
-            Protocol::Start => {
-                self.soma.send_req_output(
-                    IncrementerRole::Incrementer, IncrementerMessage::Increment
-                )?;
-            },
-
-            Protocol::Message(_, IncrementerMessage::Ack) => {
-                self.soma.send_req_output(
-                    IncrementerRole::Incrementer, IncrementerMessage::Increment
-                )?;
-            },
-
-            _ => (),
+                _ => bail!("unexpected message"),
+            }
         }
 
         Ok(self)
@@ -159,32 +152,27 @@ impl Lobe for CounterLobe {
     fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
-        self.soma.update(&msg)?;
+        if let Some(msg) = self.soma.update(msg)? {
+            match msg {
+                Protocol::Start => (),
 
-        match msg {
-            Protocol::Init(effector) => {
-                println!("counter: {}", effector.this_lobe());
-            },
-            Protocol::AddInput(input, role) => {
-                println!("counter input {} {:#?}", input, role);
-            },
+                Protocol::Message(_, CounterMessage::BumpCounter) => {
+                    if self.counter < 5 {
+                        println!("counter increment");
 
-            Protocol::Message(_, CounterMessage::BumpCounter) => {
-                if self.counter < 5 {
-                    println!("counter increment");
+                        self.counter += 1;
+                        self.soma.send_req_input(
+                            CounterRole::Incrementer, CounterMessage::Ack
+                        )?;
+                    }
+                    else {
+                        println!("stop");
+                        self.soma.effector()?.stop();
+                    }
+                },
 
-                    self.counter += 1;
-                    self.soma.send_req_input(
-                        CounterRole::Incrementer, CounterMessage::Ack
-                    )?;
-                }
-                else {
-                    println!("stop");
-                    self.soma.effector()?.stop();
-                }
-            },
-
-            _ => (),
+                _ => bail!("unexpected message"),
+            }
         }
 
         Ok(self)
@@ -215,43 +203,39 @@ impl Lobe for ForwarderLobe {
     fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
-        self.soma.update(&msg)?;
+        if let Some(msg) = self.soma.update(msg)? {
+            match msg {
+                Protocol::Start => (),
 
-        match msg {
-            Protocol::Init(effector) => {
-                println!("forwarder: {}", effector.this_lobe());
-            },
-            Protocol::AddInput(input, _) => {
-                println!("forwarder input: {}", input);
-            },
-            Protocol::AddOutput(output, _) => {
-                println!("forwarder output: {}", output);
-            },
+                Protocol::Message(src, msg) => {
+                    if src == self.soma.req_input(CounterRole::Incrementer)? {
+                        println!(
+                            "forwarding input {:#?} through {}",
+                            msg,
+                            self.soma.effector()?.this_lobe()
+                        );
 
-            Protocol::Message(src, msg) => {
-                if src == self.soma.req_input(CounterRole::Incrementer)? {
-                    println!(
-                        "forwarding input {:#?} through {}",
-                        msg,
-                        self.soma.effector()?.this_lobe()
-                    );
+                        self.soma.send_req_output(
+                            CounterRole::Incrementer, msg
+                        )?;
+                    }
+                    else if
+                        src == self.soma.req_output(CounterRole::Incrementer)?
+                    {
+                        println!(
+                            "forwarding output {:#?} through {}",
+                            msg,
+                            self.soma.effector()?.this_lobe()
+                        );
 
-                    self.soma.send_req_output(CounterRole::Incrementer, msg)?;
-                }
-                else if
-                    src == self.soma.req_output(CounterRole::Incrementer)?
-                {
-                    println!(
-                        "forwarding output {:#?} through {}",
-                        msg,
-                        self.soma.effector()?.this_lobe()
-                    );
+                        self.soma.send_req_input(
+                            CounterRole::Incrementer, msg
+                        )?;
+                    }
+                },
 
-                    self.soma.send_req_input(CounterRole::Incrementer, msg)?;
-                }
-            },
-
-            _ => ()
+                _ => bail!("unexpected message")
+            }
         }
 
         Ok(self)

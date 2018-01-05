@@ -1,7 +1,6 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::rc::Rc;
 
 use futures::prelude::*;
 use futures::sync::{ mpsc };
@@ -41,14 +40,7 @@ pub fn run<T, M, R>(lobe: T) -> Result<()> where
     let main_lobe = Handle::new_v4();
     let reactor = core.handle();
 
-    let sender_tx = queue_tx.clone();
-    let sender: Rc<Fn(&reactor::Handle, Protocol<M, R>)> = Rc::from(
-        move |r: &reactor::Handle, msg| r.spawn(
-             sender_tx.clone()
-                .send(msg)
-                .then(|_| Ok(()))
-        )
-    );
+    let sender = queue_tx.clone();
 
     // Rc to keep it alive, RefCell to mutate it in the event loop
     let mut node = LobeWrapper::new(lobe);
@@ -59,7 +51,7 @@ pub fn run<T, M, R>(lobe: T) -> Result<()> where
                 Protocol::Init(
                     Effector {
                         this_lobe: main_lobe,
-                        sender: Rc::clone(&sender),
+                        sender: sender,
                         reactor: reactor,
                     }
                 )

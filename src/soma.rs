@@ -85,22 +85,32 @@ impl<M, R> Soma<M, R> where
     }
 
     /// update the soma's inputs and outputs, then verify constraints
-    pub fn update(&mut self, msg: &Protocol<M, R>) -> Result<()> {
+    ///
+    /// if soma handles the given message, it consumes it, otherwise it is
+    /// returned so that the lobe can use it.
+    pub fn update(&mut self, msg: Protocol<M, R>)
+        -> Result<Option<Protocol<M, R>>>
+    {
         match msg {
-            &Protocol::Init(ref effector) => self.init(effector.clone()),
-
-            &Protocol::AddInput(ref input, ref role) => {
-                self.add_input(*input, *role)
-            },
-            &Protocol::AddOutput(ref output, ref role) => {
-                self.add_output(*output, *role)
+            Protocol::Init(effector) => {
+                self.init(effector)?;
+                Ok(None)
             },
 
-            &Protocol::Start => {
-                self.verify()
+            Protocol::AddInput(input, role) => {
+                self.add_input(input, role)?;
+                Ok(None)
+            },
+            Protocol::AddOutput(output, role) => {
+                self.add_output(output, role)?;
+                Ok(None)
+            },
+            Protocol::Start => {
+                self.verify()?;
+                Ok(Some(Protocol::Start))
             },
 
-            _ => Ok(())
+            msg @ _ => Ok(Some(msg))
         }
     }
 

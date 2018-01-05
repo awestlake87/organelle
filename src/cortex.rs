@@ -152,17 +152,7 @@ impl<M, R> Cortex<M, R> where
         self.effector = Some(
             Effector {
                 this_lobe: cortex_hdl.clone(),
-                sender: Rc::from(
-                    move |r: &reactor::Handle, msg: Protocol<M, R>| r.spawn(
-                        queue_tx.clone().send(msg)
-                           .then(
-                               |result| match result {
-                                   Ok(_) => Ok(()),
-                                   Err(_) => Ok(())
-                               }
-                           )
-                    )
-                ),
+                sender: queue_tx,
                 reactor: effector.reactor,
             }
         );
@@ -214,19 +204,17 @@ impl<M, R> Cortex<M, R> where
         let nodes = Rc::clone(&self.nodes);
         let forward_reactor = reactor.clone();
 
-        let stream_future = queue_rx.for_each(
-            move |msg| {
-                Self::forward(
-                    cortex_hdl,
-                    &mut (*nodes).borrow_mut(),
-                    &*external_sender,
-                    &forward_reactor,
-                    msg
-                ).unwrap();
+        let stream_future = queue_rx.for_each(move |msg| {
+            Self::forward(
+                cortex_hdl,
+                &mut (*nodes).borrow_mut(),
+                external_sender.clone(),
+                &forward_reactor,
+                msg
+            ).unwrap();
 
-                Ok(())
-            }
-        );
+            Ok(())
+        });
 
         reactor.spawn(stream_future);
 
@@ -266,7 +254,7 @@ impl<M, R> Cortex<M, R> where
     fn forward<T, U>(
         cortex: Handle,
         nodes: &mut CortexNodePool<M, R>,
-        sender: &Fn(&reactor::Handle, Protocol<T, U>),
+        sender: mpsc::Sender<Protocol<T, U>>,
         reactor: &reactor::Handle,
         msg: Protocol<M, R>
     )
@@ -327,17 +315,23 @@ impl<M, R> Cortex<M, R> where
                 }
                 else {
                     // send to external node
-                    sender(
-                        reactor,
-                        Protocol::<T, U>::convert_protocol(
-                            Protocol::Payload(actual_src, dest, msg)
+                    reactor.spawn(
+                        sender.send(
+                            Protocol::<T, U>::convert_protocol(
+                                Protocol::Payload(actual_src, dest, msg)
+                            )
                         )
+                            .then(|_| Ok(()))
                     );
                 }
             },
 
-            Protocol::Stop => sender(reactor, Protocol::Stop),
-            Protocol::Err(e) => sender(reactor, Protocol::Err(e)),
+            Protocol::Stop => reactor.spawn(
+                sender.send(Protocol::Stop).then(|_| Ok(()))
+            ),
+            Protocol::Err(e) => reactor.spawn(
+                sender.send(Protocol::Err(e)).then(|_| Ok(()))
+            ),
 
             _ => unimplemented!()
         }
