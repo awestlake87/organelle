@@ -205,10 +205,10 @@ impl<M, R> Effector<M, R> where
     }
 
     /// send a batch of messages in order to dest lobe
-    pub fn batch(&self, dest: Handle, msg: M) -> Batch<M, R> {
+    pub fn batch(&self) -> Batch<M, R> {
         let effector = self.clone();
 
-        Batch::new(effector, Protocol::Payload(self.this_lobe(), dest, msg))
+        Batch::new(effector)
     }
 
     /// stop the cortex
@@ -252,10 +252,12 @@ pub struct Batch<M, R> where
     R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
     effector:           Effector<M, R>,
-    future:             Box<
-                            Future<
-                                Item=mpsc::Sender<Protocol<M, R>>,
-                                Error=mpsc::SendError<Protocol<M, R>>,
+    future:             Option<
+                            Box<
+                                Future<
+                                    Item=mpsc::Sender<Protocol<M, R>>,
+                                    Error=mpsc::SendError<Protocol<M, R>>,
+                                >
                             >
                         >,
 }
@@ -265,10 +267,8 @@ impl<M, R> Batch<M, R>
         M: 'static,
         R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
 {
-    fn new(effector: Effector<M, R>, msg: Protocol<M, R>) -> Self {
-        let future = effector.sender.clone().send(msg);
-
-        Self { effector: effector, future: Box::new(future), }
+    fn new(effector: Effector<M, R>) -> Self {
+        Self { effector: effector, future: None }
     }
 }
 
@@ -280,22 +280,39 @@ impl<M, R> Batch<M, R> where
     pub fn then(self, dest: Handle, msg: M) -> Batch<M, R> {
         let this_lobe = self.effector.this_lobe();
 
+        let future: Box<
+            Future<
+                Item=mpsc::Sender<Protocol<M, R>>,
+                Error=mpsc::SendError<Protocol<M, R>>,
+            >
+        > = if let Some(future) = self.future {
+            Box::new(
+                future.and_then(move |sender: mpsc::Sender<Protocol<M, R>>| {
+                    sender.send(
+                        Protocol::Payload(this_lobe, dest, msg)
+                    )
+                })
+            )
+        }
+        else {
+            Box::new(
+                self.effector.sender.clone().send(
+                    Protocol::Payload(this_lobe, dest, msg)
+                )
+            )
+        };
+
         Batch {
             effector: self.effector,
-            future: Box::new(
-                self.future
-                    .and_then(move |sender: mpsc::Sender<Protocol<M, R>>| {
-                        sender.send(
-                            Protocol::Payload(this_lobe, dest, msg)
-                        )
-                    })
-            )
+            future: Some(future),
         }
     }
 
     /// spawn the batch on the event loop
     pub fn spawn(self) {
-        self.effector.spawn(self.future.then(|_| Ok(())))
+        if let Some(future) = self.future {
+            self.effector.spawn(future.then(|_| Ok(())))
+        }
     }
 }
 
