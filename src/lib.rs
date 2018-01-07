@@ -24,6 +24,7 @@ use std::marker::PhantomData;
 use std::mem;
 
 use futures::prelude::*;
+use futures::stream::iter_ok;
 use futures::sync::mpsc;
 use tokio_core::reactor;
 use uuid::Uuid;
@@ -205,10 +206,19 @@ impl<M, R> Effector<M, R> where
     }
 
     /// send a batch of messages in order to dest lobe
-    pub fn batch(&self) -> Batch<M, R> {
-        let effector = self.clone();
+    pub fn send_in_order(&self, dest: Handle, msgs: Vec<M>) {
+        let src = self.this_lobe();
 
-        Batch::new(effector)
+        self.spawn(
+            self.sender.clone()
+                .send_all(
+                    iter_ok(
+                        msgs.into_iter()
+                            .map(move |m| Protocol::Payload(src, dest, m))
+                    )
+                )
+                .then(|_| Ok(()))
+        );
     }
 
     /// stop the cortex
@@ -240,79 +250,6 @@ impl<M, R> Effector<M, R> where
 
     fn send_cortex_message(&self, msg: Protocol<M, R>) {
         self.spawn(self.sender.clone().send(msg).then(|_| Ok(())));
-    }
-}
-
-/// builds a batch of messages to be sent in order
-///
-/// after the batch is built, call spawn() on the batch to spawn the work on
-/// the event loop.
-pub struct Batch<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
-{
-    effector:           Effector<M, R>,
-    future:             Option<
-                            Box<
-                                Future<
-                                    Item=mpsc::Sender<Protocol<M, R>>,
-                                    Error=mpsc::SendError<Protocol<M, R>>,
-                                >
-                            >
-                        >,
-}
-
-impl<M, R> Batch<M, R>
-    where
-        M: 'static,
-        R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
-{
-    fn new(effector: Effector<M, R>) -> Self {
-        Self { effector: effector, future: None }
-    }
-}
-
-impl<M, R> Batch<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
-{
-    /// send another message immediately after this one
-    pub fn then(self, dest: Handle, msg: M) -> Batch<M, R> {
-        let this_lobe = self.effector.this_lobe();
-
-        let future: Box<
-            Future<
-                Item=mpsc::Sender<Protocol<M, R>>,
-                Error=mpsc::SendError<Protocol<M, R>>,
-            >
-        > = if let Some(future) = self.future {
-            Box::new(
-                future.and_then(move |sender: mpsc::Sender<Protocol<M, R>>| {
-                    sender.send(
-                        Protocol::Payload(this_lobe, dest, msg)
-                    )
-                })
-            )
-        }
-        else {
-            Box::new(
-                self.effector.sender.clone().send(
-                    Protocol::Payload(this_lobe, dest, msg)
-                )
-            )
-        };
-
-        Batch {
-            effector: self.effector,
-            future: Some(future),
-        }
-    }
-
-    /// spawn the batch on the event loop
-    pub fn spawn(self) {
-        if let Some(future) = self.future {
-            self.effector.spawn(future.then(|_| Ok(())))
-        }
     }
 }
 
