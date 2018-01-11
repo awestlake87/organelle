@@ -24,9 +24,10 @@ deploy:
 
   - provider: script
     script:
-      - cargo install --git https://github.com/semantic-rs/semantic-rs --debug
-      - export PATH=$HOME/.cargo/bin:$PATH
-      - export GH_TOKEN=$GITHUB_TOKEN
-      - semantic-rs
+      - |
+        cargo install --git https://github.com/semantic-rs/semantic-rs --debug &&
+        export PATH=$HOME/.cargo/bin:$PATH &&
+        export GH_TOKEN=$GITHUB_TOKEN &&
+        semantic-rs
     on:
       branch: master
