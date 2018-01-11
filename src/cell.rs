@@ -38,100 +38,96 @@ pub trait Cell: Sized {
     {
         Ok(self)
     }
-}
 
-/// spin up an event loop and run the provided cell
-pub fn run<T, M, R>(cell: T) -> Result<()> where
-    T: Cell<Message=M, Role=R>,
-    M: 'static,
-    R: CellRole,
-{
-    let (queue_tx, queue_rx) = mpsc::channel(100);
-    let mut core = reactor::Core::new()?;
+    /// spin up an event loop and run cell
+    fn run(self) -> Result<()> {
+        let (queue_tx, queue_rx) = mpsc::channel(100);
+        let mut core = reactor::Core::new()?;
 
-    let main_cell = Handle::new_v4();
-    let reactor = core.handle();
+        let main_cell = Handle::new_v4();
+        let reactor = core.handle();
 
-    let sender = queue_tx.clone();
+        let sender = queue_tx.clone();
 
-    // Rc to keep it alive, RefCell to mutate it in the event loop
-    let mut node = CellWrapper::new(cell);
+        // Rc to keep it alive, RefCell to mutate it in the event loop
+        let mut node = CellWrapper::new(self);
 
-    reactor.clone().spawn(
-        queue_tx.clone()
-            .send(
-                Protocol::Init(
-                    Effector {
-                        this_cell: main_cell,
-                        sender: sender,
-                        reactor: reactor,
-                    }
+        reactor.clone().spawn(
+            queue_tx.clone()
+                .send(
+                    Protocol::Init(
+                        Effector {
+                            this_cell: main_cell,
+                            sender: sender,
+                            reactor: reactor,
+                        }
+                    )
                 )
-            )
-            .and_then(
-                |tx| tx.send(Protocol::Start)
-                    .then(|_| Ok(()))
-            )
-            .then(|_| Ok(()))
+                .and_then(
+                    |tx| tx.send(Protocol::Start)
+                        .then(|_| Ok(()))
+                )
+                .then(|_| Ok(()))
 
-    );
+        );
 
-    let (tx, rx) = mpsc::channel::<Error>(1);
-    let reactor = core.handle();
+        let (tx, rx) = mpsc::channel::<Error>(1);
+        let reactor = core.handle();
 
-    let stream_future = queue_rx.take_while(
-        |msg| match *msg {
-            Protocol::Stop => Ok(false),
-            _ => Ok(true)
-        }
-    ).for_each(
-        move |msg| {
-            if let Err(e) = match msg {
-                Protocol::Init(effector) => node.update(
-                    Protocol::Init(effector)
-                ),
-                Protocol::AddInput(input, role) => node.update(
-                    Protocol::AddInput(input, role)
-                ),
-                Protocol::AddOutput(output, role) => node.update(
-                    Protocol::AddOutput(output, role)
-                ),
-
-                Protocol::Start => node.update(Protocol::Start),
-
-                Protocol::Payload(src, dest, msg) => {
-                    // messages should only be sent to our main cell
-                    assert_eq!(dest, main_cell);
-
-                    node.update(Protocol::Message(src, msg))
-                },
-
-                Protocol::Err(e) => Err(e),
-
-                _ => unreachable!(),
-            } {
-                reactor.spawn(
-                    tx.clone().send(e).then(|_| Ok(()))
-                );
+        let stream_future = queue_rx.take_while(
+            |msg| match *msg {
+                Protocol::Stop => Ok(false),
+                _ => Ok(true)
             }
+        ).for_each(
+            move |msg| {
+                if let Err(e) = match msg {
+                    Protocol::Init(effector) => node.update(
+                        Protocol::Init(effector)
+                    ),
+                    Protocol::AddInput(input, role) => node.update(
+                        Protocol::AddInput(input, role)
+                    ),
+                    Protocol::AddOutput(output, role) => node.update(
+                        Protocol::AddOutput(output, role)
+                    ),
 
-            Ok(())
-        }
-    );
+                    Protocol::Start => node.update(Protocol::Start),
 
-    let result = core.run(
-        stream_future
-            .map(|_| Ok(()))
-            .select(
-                rx.into_future()
-                    .map(|(item, _)| Err(item.unwrap()))
-                    .map_err(|_| ())
-            )
-            .map(|(result, _)| result)
-            .map_err(
-                |_| -> Error { ErrorKind::Msg("select error".into()).into() }
-            )
-    )?;
+                    Protocol::Payload(src, dest, msg) => {
+                        // messages should only be sent to our main cell
+                        assert_eq!(dest, main_cell);
 
-    result
+                        node.update(Protocol::Message(src, msg))
+                    },
+
+                    Protocol::Err(e) => Err(e),
+
+                    _ => unreachable!(),
+                } {
+                    reactor.spawn(
+                        tx.clone().send(e).then(|_| Ok(()))
+                    );
+                }
+
+                Ok(())
+            }
+        );
+
+        let result = core.run(
+            stream_future
+                .map(|_| Ok(()))
+                .select(
+                    rx.into_future()
+                        .map(|(item, _)| Err(item.unwrap()))
+                        .map_err(|_| ())
+                )
+                .map(|(result, _)| result)
+                .map_err(|_| -> Error {
+                    ErrorKind::Msg("select error".into()).into()
+                })
+        )?;
+
+        result
+    }
 }

@@ -1,9 +1,9 @@
 
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 
-use super::{ Result, Protocol, Effector, Handle, CellMessage, CellRole };
+use super::{
+    Result, Protocol, Effector, Handle, Cell, CellMessage, CellRole
+};
 
 /// defines constraints on how connections can be made
 #[derive(Debug, Copy, Clone)]
@@ -273,4 +273,67 @@ impl<M, R> Soma<M, R> where
             bail!("unexpected role {:?}", role)
         }
     }
+}
+
+/// cell used to wrap a Soma and a cell specialized with Nucleus
+pub struct Eukaryote<M: CellMessage, R: CellRole, N> where
+    N: Nucleus<Message=M, Role=R> + Sized + 'static
+{
+    soma:       Soma<M, R>,
+    nucleus:    N,
+}
+
+impl<M: CellMessage, R: CellRole, N> Eukaryote<M, R, N> where
+    N: Nucleus<Message=M, Role=R> + Sized + 'static
+{
+    /// wrap a nucleus and constrain the soma
+    pub fn new(
+        nucleus: N, inputs: Vec<Constraint<R>>, outputs: Vec<Constraint<R>>
+    )
+        -> Result<Self>
+    {
+        Ok(
+            Self {
+                soma: Soma::new(inputs, outputs)?,
+                nucleus: nucleus
+            }
+        )
+    }
+}
+
+impl<M: CellMessage, R: CellRole, N> Cell for Eukaryote<M, R, N> where
+    N: Nucleus<Message=M, Role=R>
+{
+    type Message = M;
+    type Role = R;
+
+    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+        -> Result<Self>
+    {
+        if let Some(msg) = self.soma.update(msg)? {
+            let nucleus = self.nucleus.update(&self.soma, msg)?;
+
+            Ok(Eukaryote { soma: self.soma, nucleus: nucleus })
+        }
+        else {
+            Ok(self)
+        }
+    }
+}
+
+/// a specialized cell meant to ensure the Soma is always handled correctly
+pub trait Nucleus: Sized {
+    /// a message that was not handled by the Soma
+    type Message: CellMessage;
+    /// the role a connection between cells takes
+    type Role: CellRole;
+
+    /// update the nucleus with the Soma and cell message
+    fn update(
+        self,
+        soma: &Soma<Self::Message, Self::Role>,
+        msg: Protocol<Self::Message, Self::Role>
+    )
+        -> Result<Self>
+    ;
 }

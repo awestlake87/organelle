@@ -15,8 +15,8 @@ mod cell;
 mod soma;
 
 pub use organelle::{ Organelle };
-pub use cell::{ Cell, run, CellMessage, CellRole };
-pub use soma::{ Soma, Constraint };
+pub use cell::{ Cell, CellMessage, CellRole };
+pub use soma::{ Soma, Constraint, Nucleus, Eukaryote };
 
 use std::fmt::Debug;
 use std::hash::Hash;

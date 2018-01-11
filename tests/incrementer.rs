@@ -252,7 +252,7 @@ fn test_organelle() {
     println!("organelle {}", main);
     organelle.connect(main, counter, IncrementerRole::Incrementer);
 
-    run(organelle).unwrap();
+    organelle.run().unwrap();
 }
 
 #[test]
@@ -273,11 +273,17 @@ fn test_sub_organelle() {
         incrementer, counter, IncrementerRole::Incrementer
     );
 
-    run(inc_organelle).unwrap();
+    inc_organelle.run().unwrap();
 }
 
 struct InitErrorCell {
 
+}
+
+impl InitErrorCell {
+    fn new() -> Self {
+        Self { }
+    }
 }
 
 impl Cell for InitErrorCell {
@@ -301,6 +307,12 @@ struct UpdateErrorCell {
 
 }
 
+impl UpdateErrorCell {
+    fn new() -> Self {
+        Self { }
+    }
+}
+
 impl Cell for UpdateErrorCell {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
@@ -312,15 +324,15 @@ impl Cell for UpdateErrorCell {
 
 #[test]
 fn test_cell_error() {
-    if let Ok(_) = run(InitErrorCell { }) {
+    if let Ok(_) = InitErrorCell::new().run() {
         panic!("cell init was supposed to fail");
     }
 
-    if let Ok(_) = run(UpdateErrorCell { }) {
+    if let Ok(_) = UpdateErrorCell::new().run() {
         panic!("cell update was supposed to fail");
     }
 
-    if let Ok(_) = run(Organelle::new(UpdateErrorCell { })) {
+    if let Ok(_) = Organelle::new(UpdateErrorCell { }).run() {
         panic!("organelle updates were supposed to fail");
     }
 }

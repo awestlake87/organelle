@@ -103,7 +103,7 @@ fn test_invalid_input() {
 
     organelle.connect(give1, give2, TestRole::Something);
 
-    if let Err(e) = run(organelle) {
+    if let Err(e) = organelle.run() {
         eprintln!("error {:#?}", e)
     }
     else {
@@ -122,19 +122,19 @@ fn test_require_one() {
 
         organelle.connect(give, take, TestRole::Something);
 
-        run(organelle).unwrap();
+        organelle.run().unwrap();
     }
 
     // make sure require one fails as intended
     {
-        if let Err(e) = run(TakeSomethingCell::new().unwrap()) {
+        if let Err(e) = TakeSomethingCell::new().unwrap().run() {
             eprintln!("error {:#?}", e)
         }
         else {
             panic!("TakeSomethingCell has no input, so it should fail")
         }
 
-        if let Err(e) = run(GiveSomethingCell::new().unwrap()) {
+        if let Err(e) = GiveSomethingCell::new().unwrap().run() {
             eprintln!("error {:#?}", e)
         }
         else {
