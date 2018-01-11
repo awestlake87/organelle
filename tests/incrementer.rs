@@ -2,9 +2,9 @@
 #[macro_use]
 extern crate error_chain;
 
-extern crate cortical;
+extern crate organelle;
 
-use cortical::*;
+use organelle::*;
 
 #[derive(Debug)]
 enum IncrementerMessage {
@@ -40,11 +40,11 @@ impl From<CounterRole> for IncrementerRole {
 
 type IncrementerSoma = Soma<IncrementerMessage, IncrementerRole>;
 
-struct IncrementerLobe {
+struct IncrementerCell {
     soma:       IncrementerSoma,
 }
 
-impl IncrementerLobe {
+impl IncrementerCell {
     fn new() -> Result<Self> {
         Ok(
             Self {
@@ -59,7 +59,7 @@ impl IncrementerLobe {
     }
 }
 
-impl Lobe for IncrementerLobe {
+impl Cell for IncrementerCell {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
 
@@ -124,13 +124,13 @@ impl From<IncrementerRole> for CounterRole {
 
 type CounterSoma = Soma<CounterMessage, CounterRole>;
 
-struct CounterLobe {
+struct CounterCell {
     soma: CounterSoma,
 
     counter: u32
 }
 
-impl CounterLobe {
+impl CounterCell {
     fn new() -> Result<Self> {
         Ok(
             Self {
@@ -145,7 +145,7 @@ impl CounterLobe {
     }
 }
 
-impl Lobe for CounterLobe {
+impl Cell for CounterCell {
     type Message = CounterMessage;
     type Role = CounterRole;
 
@@ -179,11 +179,11 @@ impl Lobe for CounterLobe {
     }
 }
 
-struct ForwarderLobe {
+struct ForwarderCell {
     soma: CounterSoma,
 }
 
-impl ForwarderLobe {
+impl ForwarderCell {
     fn new() -> Result<Self> {
         Ok(
             Self {
@@ -196,7 +196,7 @@ impl ForwarderLobe {
     }
 }
 
-impl Lobe for ForwarderLobe {
+impl Cell for ForwarderCell {
     type Message = CounterMessage;
     type Role = CounterRole;
 
@@ -212,7 +212,7 @@ impl Lobe for ForwarderLobe {
                         println!(
                             "forwarding input {:#?} through {}",
                             msg,
-                            self.soma.effector()?.this_lobe()
+                            self.soma.effector()?.this_cell()
                         );
 
                         self.soma.send_req_output(
@@ -225,7 +225,7 @@ impl Lobe for ForwarderLobe {
                         println!(
                             "forwarding output {:#?} through {}",
                             msg,
-                            self.soma.effector()?.this_lobe()
+                            self.soma.effector()?.this_cell()
                         );
 
                         self.soma.send_req_input(
@@ -243,51 +243,51 @@ impl Lobe for ForwarderLobe {
 }
 
 #[test]
-fn test_cortex() {
-    let mut cortex = Cortex::new(IncrementerLobe::new().unwrap());
+fn test_organelle() {
+    let mut organelle = Organelle::new(IncrementerCell::new().unwrap());
 
-    let counter = cortex.add_lobe(CounterLobe::new().unwrap());
+    let counter = organelle.add_cell(CounterCell::new().unwrap());
 
-    let main = cortex.get_main_handle();
-    println!("cortex {}", main);
-    cortex.connect(main, counter, IncrementerRole::Incrementer);
+    let main = organelle.get_main_handle();
+    println!("organelle {}", main);
+    organelle.connect(main, counter, IncrementerRole::Incrementer);
 
-    run(cortex).unwrap();
+    run(organelle).unwrap();
 }
 
 #[test]
-fn test_sub_cortex() {
-    let mut counter_cortex = Cortex::new(ForwarderLobe::new().unwrap());
+fn test_sub_organelle() {
+    let mut counter_organelle = Organelle::new(ForwarderCell::new().unwrap());
 
-    let forwarder = counter_cortex.get_main_handle();
-    let counter = counter_cortex.add_lobe(CounterLobe::new().unwrap());
+    let forwarder = counter_organelle.get_main_handle();
+    let counter = counter_organelle.add_cell(CounterCell::new().unwrap());
 
-    counter_cortex.connect(forwarder, counter, CounterRole::Incrementer);
+    counter_organelle.connect(forwarder, counter, CounterRole::Incrementer);
 
-    let mut inc_cortex = Cortex::new(IncrementerLobe::new().unwrap());
+    let mut inc_organelle = Organelle::new(IncrementerCell::new().unwrap());
 
-    let incrementer = inc_cortex.get_main_handle();
-    let counter = inc_cortex.add_lobe(counter_cortex);
-    // connect the incrementer to the counter cortex
-    inc_cortex.connect(
+    let incrementer = inc_organelle.get_main_handle();
+    let counter = inc_organelle.add_cell(counter_organelle);
+    // connect the incrementer to the counter organelle
+    inc_organelle.connect(
         incrementer, counter, IncrementerRole::Incrementer
     );
 
-    run(inc_cortex).unwrap();
+    run(inc_organelle).unwrap();
 }
 
-struct InitErrorLobe {
+struct InitErrorCell {
 
 }
 
-impl Lobe for InitErrorLobe {
+impl Cell for InitErrorCell {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
 
     fn update(self, msg: Protocol<Self::Message, Self::Role>) -> Result<Self> {
         match msg {
             Protocol::Init(effector) => {
-                effector.error("a lobe error!".into());
+                effector.error("a cell error!".into());
 
                 Ok(self)
             },
@@ -297,11 +297,11 @@ impl Lobe for InitErrorLobe {
     }
 }
 
-struct UpdateErrorLobe {
+struct UpdateErrorCell {
 
 }
 
-impl Lobe for UpdateErrorLobe {
+impl Cell for UpdateErrorCell {
     type Message = IncrementerMessage;
     type Role = IncrementerRole;
 
@@ -311,16 +311,16 @@ impl Lobe for UpdateErrorLobe {
 }
 
 #[test]
-fn test_lobe_error() {
-    if let Ok(_) = run(InitErrorLobe { }) {
-        panic!("lobe init was supposed to fail");
+fn test_cell_error() {
+    if let Ok(_) = run(InitErrorCell { }) {
+        panic!("cell init was supposed to fail");
     }
 
-    if let Ok(_) = run(UpdateErrorLobe { }) {
-        panic!("lobe update was supposed to fail");
+    if let Ok(_) = run(UpdateErrorCell { }) {
+        panic!("cell update was supposed to fail");
     }
 
-    if let Ok(_) = run(Cortex::new(UpdateErrorLobe { })) {
-        panic!("cortex updates were supposed to fail");
+    if let Ok(_) = run(Organelle::new(UpdateErrorCell { })) {
+        panic!("organelle updates were supposed to fail");
     }
 }

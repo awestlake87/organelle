@@ -2,9 +2,9 @@
 #[macro_use]
 extern crate error_chain;
 
-extern crate cortical;
+extern crate organelle;
 
-use cortical::*;
+use organelle::*;
 
 enum TestMessage {
     Something,
@@ -15,11 +15,11 @@ enum TestRole {
     Something,
 }
 
-struct GiveSomethingLobe {
+struct GiveSomethingCell {
     soma:           Soma<TestMessage, TestRole>,
 }
 
-impl GiveSomethingLobe {
+impl GiveSomethingCell {
     fn new() -> Result<Self> {
         Ok(
             Self {
@@ -32,7 +32,7 @@ impl GiveSomethingLobe {
     }
 }
 
-impl Lobe for GiveSomethingLobe {
+impl Cell for GiveSomethingCell {
     type Message = TestMessage;
     type Role = TestRole;
 
@@ -54,11 +54,11 @@ impl Lobe for GiveSomethingLobe {
     }
 }
 
-struct TakeSomethingLobe {
+struct TakeSomethingCell {
     soma:           Soma<TestMessage, TestRole>,
 }
 
-impl TakeSomethingLobe {
+impl TakeSomethingCell {
     fn new() -> Result<Self> {
         Ok(
             Self {
@@ -71,7 +71,7 @@ impl TakeSomethingLobe {
     }
 }
 
-impl Lobe for TakeSomethingLobe {
+impl Cell for TakeSomethingCell {
     type Message = TestMessage;
     type Role = TestRole;
 
@@ -81,7 +81,7 @@ impl Lobe for TakeSomethingLobe {
         if let Some(msg) = self.soma.update(msg)? {
             match msg {
                 Protocol::Start => (),
-                
+
                 Protocol::Message(_, TestMessage::Something) => {
                     self.soma.effector()?.stop();
                 },
@@ -96,18 +96,18 @@ impl Lobe for TakeSomethingLobe {
 
 #[test]
 fn test_invalid_input() {
-    let mut cortex = Cortex::new(GiveSomethingLobe::new().unwrap());
+    let mut organelle = Organelle::new(GiveSomethingCell::new().unwrap());
 
-    let give1 = cortex.get_main_handle();
-    let give2 = cortex.add_lobe(GiveSomethingLobe::new().unwrap());
+    let give1 = organelle.get_main_handle();
+    let give2 = organelle.add_cell(GiveSomethingCell::new().unwrap());
 
-    cortex.connect(give1, give2, TestRole::Something);
+    organelle.connect(give1, give2, TestRole::Something);
 
-    if let Err(e) = run(cortex) {
+    if let Err(e) = run(organelle) {
         eprintln!("error {:#?}", e)
     }
     else {
-        panic!("GiveSomethingLobe should not accept this input")
+        panic!("GiveSomethingCell should not accept this input")
     }
 }
 
@@ -115,30 +115,30 @@ fn test_invalid_input() {
 fn test_require_one() {
     // make sure require one works as intended
     {
-        let mut cortex = Cortex::new(GiveSomethingLobe::new().unwrap());
+        let mut organelle = Organelle::new(GiveSomethingCell::new().unwrap());
 
-        let give = cortex.get_main_handle();
-        let take = cortex.add_lobe(TakeSomethingLobe::new().unwrap());
+        let give = organelle.get_main_handle();
+        let take = organelle.add_cell(TakeSomethingCell::new().unwrap());
 
-        cortex.connect(give, take, TestRole::Something);
+        organelle.connect(give, take, TestRole::Something);
 
-        run(cortex).unwrap();
+        run(organelle).unwrap();
     }
 
     // make sure require one fails as intended
     {
-        if let Err(e) = run(TakeSomethingLobe::new().unwrap()) {
+        if let Err(e) = run(TakeSomethingCell::new().unwrap()) {
             eprintln!("error {:#?}", e)
         }
         else {
-            panic!("TakeSomethingLobe has no input, so it should fail")
+            panic!("TakeSomethingCell has no input, so it should fail")
         }
 
-        if let Err(e) = run(GiveSomethingLobe::new().unwrap()) {
+        if let Err(e) = run(GiveSomethingCell::new().unwrap()) {
             eprintln!("error {:#?}", e)
         }
         else {
-            panic!("GiveSomethingLobe has no output, so it should fail")
+            panic!("GiveSomethingCell has no output, so it should fail")
         }
     }
 }

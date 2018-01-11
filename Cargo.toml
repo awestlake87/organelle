@@ -1,6 +1,6 @@
 [package]
-name = "cortical"
-version = "0.2.0"
+name = "organelle"
+version = "0.1.0"
 authors = ["Andrew J Westlake <kelixes@gmail.com>"]
 
 [dependencies]

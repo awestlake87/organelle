@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::{ Result, Protocol, Effector, Handle };
+use super::{ Result, Protocol, Effector, Handle, CellMessage, CellRole };
 
 /// defines constraints on how connections can be made
 #[derive(Debug, Copy, Clone)]
 pub enum Constraint<R> where
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+    R: CellRole,
 {
     /// require one connection with the specified role
     RequireOne(R),
@@ -27,8 +27,8 @@ type ConstraintMap<R> = HashMap<R, (ConstraintHandle, Constraint<R>)>;
 
 /// provides core convenience functions with little boilerplate
 pub struct Soma<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+    M: CellMessage,
+    R: CellRole,
 {
     effector:               Option<Effector<M, R>>,
 
@@ -37,8 +37,8 @@ pub struct Soma<M, R> where
 }
 
 impl<M, R> Soma<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+    M: CellMessage,
+    R: CellRole,
 {
     /// new soma with constraints and default user-defined state
     pub fn new(inputs: Vec<Constraint<R>>, outputs: Vec<Constraint<R>>)
@@ -87,7 +87,7 @@ impl<M, R> Soma<M, R> where
     /// update the soma's inputs and outputs, then verify constraints
     ///
     /// if soma handles the given message, it consumes it, otherwise it is
-    /// returned so that the lobe can use it.
+    /// returned so that the cell can use it.
     pub fn update(&mut self, msg: Protocol<M, R>)
         -> Result<Option<Protocol<M, R>>>
     {
@@ -114,7 +114,7 @@ impl<M, R> Soma<M, R> where
         }
     }
 
-    /// get the effector assigned to this lobe
+    /// get the effector assigned to this cell
     pub fn effector(&self) -> Result<&Effector<M, R>> {
         if self.effector.is_some() {
             Ok(self.effector.as_ref().unwrap())
@@ -194,7 +194,7 @@ impl<M, R> Soma<M, R> where
         Ok(map)
     }
 
-    fn add_role(map: &mut ConstraintMap<R>, lobe: Handle, role: R)
+    fn add_role(map: &mut ConstraintMap<R>, cell: Handle, role: R)
         -> Result<()>
     {
         if let Some(&mut (ref mut handle, ref constraint))
@@ -204,11 +204,11 @@ impl<M, R> Soma<M, R> where
                 Constraint::RequireOne(role) => {
                     let new_hdl = match handle {
                         &mut ConstraintHandle::Empty => {
-                            ConstraintHandle::One(lobe)
+                            ConstraintHandle::One(cell)
                         },
 
                         _ => bail!(
-                            "only one lobe can be assigned to role {:?}",
+                            "only one cell can be assigned to role {:?}",
                             role
                         ),
                     };
@@ -216,8 +216,8 @@ impl<M, R> Soma<M, R> where
                     *handle = new_hdl;
                 },
                 Constraint::Variadic(role) => match handle {
-                    &mut ConstraintHandle::Many(ref mut lobes) => {
-                        lobes.push(lobe);
+                    &mut ConstraintHandle::Many(ref mut cells) => {
+                        cells.push(cell);
                     },
 
                     _ => unreachable!("role {:?} was configured wrong", role)
@@ -253,7 +253,7 @@ impl<M, R> Soma<M, R> where
         if let Some(&(ref handle, Constraint::RequireOne(_))) = map.get(&role)
         {
             match handle {
-                &ConstraintHandle::One(ref lobe) => Ok(*lobe),
+                &ConstraintHandle::One(ref cell) => Ok(*cell),
                 _ => bail!("role {:?} does not meet constraint", role)
             }
         }
@@ -265,7 +265,7 @@ impl<M, R> Soma<M, R> where
     fn get_var(map: &ConstraintMap<R>, role: R) -> Result<&Vec<Handle>> {
         if let Some(&(ref handle, Constraint::Variadic(_))) = map.get(&role) {
             match handle {
-                &ConstraintHandle::Many(ref lobes) => Ok(lobes),
+                &ConstraintHandle::Many(ref cells) => Ok(cells),
                 _ => unreachable!("role {:?} was configured wrong")
             }
         }

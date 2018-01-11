@@ -9,9 +9,19 @@ use futures::prelude::*;
 use futures::sync::{ mpsc };
 use tokio_core::reactor;
 
-use super::{ Result, Protocol, Handle, Effector, Lobe, Node, LobeWrapper };
+use super::{
+    Result,
+    Protocol,
+    Handle,
+    Effector,
+    Cell,
+    Node,
+    CellWrapper,
+    CellRole,
+    CellMessage,
+};
 
-struct CortexNodePool<M, R> {
+struct OrganelleNodePool<M, R> {
     main_hdl:       Handle,
 
     main:           Box<Node<M, R>>,
@@ -19,41 +29,41 @@ struct CortexNodePool<M, R> {
     misc:           HashMap<Handle, Box<Node<M, R>>>,
 }
 
-/// a special lobe designed to contain a network of interconnected lobes
+/// a special cell designed to contain a network of interconnected cells
 ///
-/// the cortex is created with one lobe. this lobe is the only lobe within the
-/// cortex that is allowed to communicate or connect to the outside world. it
+/// the organelle is created with one cell. this cell is the only cell within the
+/// organelle that is allowed to communicate or connect to the outside world. it
 /// acts as an entry point for the network, providing essential external data
-/// while keeping implementation-specific data and lobes hidden. upon receiving
+/// while keeping implementation-specific data and cells hidden. upon receiving
 /// an update, it has the opportunity to communicate these updates with
-/// external lobes.
+/// external cells.
 ///
-/// the intent is to allow cortices to be hierarchical and potentially contain
-/// any number of nested lobe networks. in order to do this, the cortex
+/// the intent is to allow organelles to be hierarchical and potentially contain
+/// any number of nested cell networks. in order to do this, the organelle
 /// isolates a group of messages from the larger whole. this is essential for
 /// extensibility and maintainability.
 ///
-/// any cortex can be plugged into any other cortex provided their messages and
+/// any organelle can be plugged into any other organelle provided their messages and
 /// constraints can convert between each other using From and Into
-pub struct Cortex<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
+pub struct Organelle<M, R> where
+    M: CellMessage,
+    R: CellRole
 {
     effector:       Option<Effector<M, R>>,
 
     main_hdl:       Handle,
     connections:    Vec<(Handle, Handle, R)>,
 
-    nodes:          Rc<RefCell<CortexNodePool<M, R>>>,
+    nodes:          Rc<RefCell<OrganelleNodePool<M, R>>>,
 }
 
-impl<M, R> Cortex<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+impl<M, R> Organelle<M, R> where
+    M: CellMessage,
+    R: CellRole,
 {
-    /// create a new cortex with input and output lobes
+    /// create a new organelle with input and output cells
     pub fn new<L>(main: L) -> Self where
-        L: Lobe<Message=M, Role=R> + 'static,
+        L: Cell<Message=M, Role=R> + 'static,
     {
         let main_hdl = Handle::new_v4();
 
@@ -65,10 +75,10 @@ impl<M, R> Cortex<M, R> where
 
             nodes: Rc::from(
                 RefCell::new(
-                    CortexNodePool::<M, R> {
+                    OrganelleNodePool::<M, R> {
                         main_hdl: main_hdl,
 
-                        main: Box::new(LobeWrapper::new(main)),
+                        main: Box::new(CellWrapper::new(main)),
 
                         misc: HashMap::new()
                     }
@@ -78,13 +88,13 @@ impl<M, R> Cortex<M, R> where
     }
 
 
-    /// add a new lobe to the cortex and initialize it
+    /// add a new cell to the organelle and initialize it
     ///
-    /// as long as the lobe's message type can convert Into and From the
-    /// cortex's message type, it can be added to the cortex and can
-    /// communicate with any lobes that do the same.
-    pub fn add_lobe<L>(&mut self, lobe: L) -> Handle where
-        L: Lobe + 'static,
+    /// as long as the cell's message type can convert Into and From the
+    /// organelle's message type, it can be added to the organelle and can
+    /// communicate with any cells that do the same.
+    pub fn add_cell<L>(&mut self, cell: L) -> Handle where
+        L: Cell + 'static,
 
         M: From<L::Message> + Into<L::Message> + 'static,
         L::Message: From<M> + Into<M> + 'static,
@@ -109,7 +119,7 @@ impl<M, R> Cortex<M, R> where
             + PartialEq
             + 'static,
     {
-        let node = Box::new(LobeWrapper::new(lobe));
+        let node = Box::new(CellWrapper::new(cell));
         let handle = Handle::new_v4();
 
         (*self.nodes).borrow_mut().misc.insert(handle, node);
@@ -122,7 +132,7 @@ impl<M, R> Cortex<M, R> where
         self.connections.push((input, output, role));
     }
 
-    /// get the main lobe's handle
+    /// get the main cell's handle
     pub fn get_main_handle(&self) -> Handle {
         self.main_hdl
     }
@@ -139,19 +149,19 @@ impl<M, R> Cortex<M, R> where
     }
 
     fn init<T, U>(mut self, effector: Effector<T, U>) -> Result<Self> where
-        M: From<T> + Into<T> + 'static,
-        T: From<M> + Into<M> + 'static,
+        M: From<T> + Into<T> + CellMessage,
+        T: From<M> + Into<M> + CellMessage,
 
-        R: From<U> + Into<U> + Debug + Copy + Clone + Hash + Eq + PartialEq,
-        U: From<R> + Into<R> + Debug + Copy + Clone + Hash + Eq + PartialEq,
+        R: From<U> + Into<U> + CellRole,
+        U: From<R> + Into<R> + CellRole,
     {
-        let cortex_hdl = effector.this_lobe;
+        let organelle_hdl = effector.this_cell;
 
         let (queue_tx, queue_rx) = mpsc::channel(100);
 
         self.effector = Some(
             Effector {
-                this_lobe: cortex_hdl.clone(),
+                this_cell: organelle_hdl.clone(),
                 sender: queue_tx,
                 reactor: effector.reactor,
             }
@@ -176,7 +186,7 @@ impl<M, R> Cortex<M, R> where
             main_hdl,
             Protocol::Init(
                 Effector {
-                    this_lobe: main_hdl,
+                    this_cell: main_hdl,
                     sender: sender.clone(),
                     reactor: reactor.clone(),
                 }
@@ -187,7 +197,7 @@ impl<M, R> Cortex<M, R> where
             node.update(
                 Protocol::Init(
                     Effector {
-                        this_lobe: *hdl,
+                        this_cell: *hdl,
                         sender: sender.clone(),
                         reactor: reactor.clone(),
                     }
@@ -206,7 +216,7 @@ impl<M, R> Cortex<M, R> where
 
         let stream_future = queue_rx.for_each(move |msg| {
             Self::forward(
-                cortex_hdl,
+                organelle_hdl,
                 &mut (*nodes).borrow_mut(),
                 external_sender.clone(),
                 &forward_reactor,
@@ -252,43 +262,28 @@ impl<M, R> Cortex<M, R> where
     }
 
     fn forward<T, U>(
-        cortex: Handle,
-        nodes: &mut CortexNodePool<M, R>,
+        organelle: Handle,
+        nodes: &mut OrganelleNodePool<M, R>,
         sender: mpsc::Sender<Protocol<T, U>>,
         reactor: &reactor::Handle,
         msg: Protocol<M, R>
     )
         -> Result<()> where
-            M: From<T> + Into<T> + 'static,
-            T: From<M> + Into<M> + 'static,
+            M: From<T> + Into<T> + CellMessage,
+            T: From<M> + Into<M> + CellMessage,
 
-            R: From<U>
-                + Into<U>
-                + Debug
-                + Copy
-                + Clone
-                + Hash
-                + Eq
-                + PartialEq,
-
-            U: From<R>
-                + Into<R>
-                + Debug
-                + Copy
-                + Clone
-                + Hash
-                + Eq
-                + PartialEq,
+            R: From<U> + Into<U> + CellRole,
+            U: From<R> + Into<R> + CellRole,
     {
         match msg {
             Protocol::Payload(src, dest, msg) => {
                 let actual_src = {
-                    // check if src is the main lobe
+                    // check if src is the main cell
                     if src == nodes.main_hdl {
                         // if src is the main node, then it becomes tricky.
                         // these are allowed to send to both internal and
-                        // external lobes, so the question becomes whether or
-                        // not to advertise itself as the lobe or the cortex
+                        // external cells, so the question becomes whether or
+                        // not to advertise itself as the cell or the organelle
 
                         if dest == nodes.main_hdl
                             || nodes.misc.contains_key(&dest)
@@ -297,8 +292,8 @@ impl<M, R> Cortex<M, R> where
                             src
                         }
                         else {
-                            // external node - use cortex hdl
-                            cortex
+                            // external node - use organelle hdl
+                            organelle
                         }
                     }
                     else {
@@ -340,9 +335,9 @@ impl<M, R> Cortex<M, R> where
     }
 }
 
-impl<M, R> Lobe for Cortex<M, R> where
-    M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+impl<M, R> Cell for Organelle<M, R> where
+    M: CellMessage,
+    R: CellRole,
 {
     type Message = M;
     type Role = R;

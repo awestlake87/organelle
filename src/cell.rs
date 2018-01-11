@@ -7,20 +7,32 @@ use futures::sync::{ mpsc };
 use tokio_core::reactor;
 
 use super::{
-    Result, Error, ErrorKind, Protocol, Handle, Effector, LobeWrapper, Node
+    Result, Error, ErrorKind, Protocol, Handle, Effector, CellWrapper, Node
 };
 
-/// defines an interface for a lobe of any type
-///
-/// generic across the user-defined message to be passed between lobes and the
-/// user-defined roles for connections
-pub trait Lobe: Sized {
-    /// user-defined message to be passed between lobes
-    type Message: 'static;
-    /// user-defined roles for connections
-    type Role: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static;
+/// defines the collection of traits necessary to act as a cell message
+pub trait CellMessage: 'static { }
 
-    /// apply any changes to the lobe's state as a result of _msg
+impl<T> CellMessage for T where T: 'static { }
+
+/// defines the collection of traits necessary to act as a cell role
+pub trait CellRole: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static { }
+
+impl<T> CellRole for T where
+    T: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
+{ }
+
+/// defines an interface for a cell of any type
+///
+/// generic across the user-defined message to be passed between cells and the
+/// user-defined roles for connections
+pub trait Cell: Sized {
+    /// user-defined message to be passed between cells
+    type Message: CellMessage;
+    /// user-defined roles for connections
+    type Role: CellRole;
+
+    /// apply any changes to the cell's state as a result of _msg
     fn update(self, _msg: Protocol<Self::Message, Self::Role>)
         -> Result<Self>
     {
@@ -28,29 +40,29 @@ pub trait Lobe: Sized {
     }
 }
 
-/// spin up an event loop and run the provided lobe
-pub fn run<T, M, R>(lobe: T) -> Result<()> where
-    T: Lobe<Message=M, Role=R>,
+/// spin up an event loop and run the provided cell
+pub fn run<T, M, R>(cell: T) -> Result<()> where
+    T: Cell<Message=M, Role=R>,
     M: 'static,
-    R: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+    R: CellRole,
 {
     let (queue_tx, queue_rx) = mpsc::channel(100);
     let mut core = reactor::Core::new()?;
 
-    let main_lobe = Handle::new_v4();
+    let main_cell = Handle::new_v4();
     let reactor = core.handle();
 
     let sender = queue_tx.clone();
 
     // Rc to keep it alive, RefCell to mutate it in the event loop
-    let mut node = LobeWrapper::new(lobe);
+    let mut node = CellWrapper::new(cell);
 
     reactor.clone().spawn(
         queue_tx.clone()
             .send(
                 Protocol::Init(
                     Effector {
-                        this_lobe: main_lobe,
+                        this_cell: main_cell,
                         sender: sender,
                         reactor: reactor,
                     }
@@ -88,8 +100,8 @@ pub fn run<T, M, R>(lobe: T) -> Result<()> where
                 Protocol::Start => node.update(Protocol::Start),
 
                 Protocol::Payload(src, dest, msg) => {
-                    // messages should only be sent to our main lobe
-                    assert_eq!(dest, main_lobe);
+                    // messages should only be sent to our main cell
+                    assert_eq!(dest, main_cell);
 
                     node.update(Protocol::Message(src, msg))
                 },
