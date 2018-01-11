@@ -9,6 +9,9 @@ matrix:
   allow_failures:
     - rust: nightly
 
+before_script:
+  - | cargo install --git https://github.com/semantic-rs/semantic-rs --debug
+
 cache: cargo
 
 after_success:
@@ -17,15 +20,13 @@ after_success:
 deploy:
   - provider: pages
     skip_cleanup: true
-    github_token: $GITHUB_TOKEN # Set in travis-ci.org dashboard
+    github_token: $GH_TOKEN # Set in travis-ci.org dashboard
     on:
       branch: master
     local_dir: ./target/doc
 
   - provider: script
     script:
-      - |
-        cargo install --git https://github.com/semantic-rs/semantic-rs --debug &&
-        PATH=$HOME/.cargo/bin:$PATH:GH_TOKEN=$GITHUB_TOKEN semantic-rs
+      - | semantic-rs
     on:
       branch: master
