@@ -10,7 +10,8 @@ matrix:
     - rust: nightly
 
 before_script:
-  - | cargo install --git https://github.com/semantic-rs/semantic-rs --debug
+  - |
+    cargo install --git https://github.com/semantic-rs/semantic-rs --debug
 
 cache: cargo
 
@@ -27,6 +28,7 @@ deploy:
 
   - provider: script
     script:
-      - | semantic-rs
+      - |
+        semantic-rs
     on:
       branch: master
