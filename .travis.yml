@@ -11,7 +11,7 @@ matrix:
 
 cache: cargo
 
-before_deploy:
+after_success:
   - cargo doc --no-deps
 
 deploy:
@@ -26,8 +26,6 @@ deploy:
     script:
       - |
         cargo install --git https://github.com/semantic-rs/semantic-rs --debug &&
-        export PATH=$HOME/.cargo/bin:$PATH &&
-        export GH_TOKEN=$GITHUB_TOKEN &&
-        semantic-rs
+        PATH=$HOME/.cargo/bin:$PATH:GH_TOKEN=$GITHUB_TOKEN semantic-rs
     on:
       branch: master
