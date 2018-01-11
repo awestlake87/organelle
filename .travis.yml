@@ -5,16 +5,6 @@ rust:
   - beta
   - nightly
 
-# only trigger a build on the master branch
-branches:
-  only:
-    - master
-
-before_script:
-  - |
-      cargo install --git https://github.com/semantic-rs/semantic-rs --debug &&
-      export PATH=$HOME/.cargo/bin:$PATH &&
-
 matrix:
   allow_failures:
     - rust: nightly
@@ -34,6 +24,8 @@ deploy:
 
   - provider: script
     script:
+      - cargo install --git https://github.com/semantic-rs/semantic-rs --debug
+      - export PATH=$HOME/.cargo/bin:$PATH
       - export GH_TOKEN=$GITHUB_TOKEN
       - semantic-rs
     on:
