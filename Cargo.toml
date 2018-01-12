@@ -1,13 +1,13 @@
 [package]
 name = "organelle"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Andrew J Westlake <kelixes@gmail.com>"]
 description = "framework for creating emergent AI systems"
 license = "MIT"
 license-file = "LICENSE.md"
-documentation = "https://awestlake87.github.io/organelle/organelle"
-homepage = "https://awestlake87.github.io/organelle"
-repository = "https://awestlake87.github.io/organelle"
+documentation = "https://docs.rs/organelle/0.1.0/organelle"
+homepage = "https://github.com/awestlake87/organelle"
+repository = "https://github.com/awestlake87/organelle"
 
 [dependencies]
 error-chain = "0.11"
