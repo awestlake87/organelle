@@ -1,5 +1,13 @@
 language: rust
 
+addons:
+  apt:
+    packages:
+      - libcurl4-openssl-dev
+      - libelf-dev
+      - libdw-dev
+      - binutils-dev
+
 rust:
   - stable
   - beta
@@ -9,14 +17,23 @@ matrix:
   allow_failures:
     - rust: nightly
 
-before_script:
-  - |
-      cargo install --git https://github.com/semantic-rs/semantic-rs --debug --force
-
 cache: cargo
 
+before_script:
+  - |
+      pip install 'travis-cargo<0.2' --user &&
+      export PATH=$HOME/.local/bin:$PATH
+
+script:
+  - |
+      travis-cargo build &&
+      travis-cargo test &&
+      travis-cargo bench &&
+      travis-cargo --only stable doc
+
 after_success:
-  - cargo doc --no-deps
+  - travis-cargo --only stable doc-upload
+  - travis-cargo --only stable publish --token $CARGO_TOKEN
 
 deploy:
   - provider: pages
@@ -24,10 +41,5 @@ deploy:
     github_token: $GH_TOKEN # Set in travis-ci.org dashboard
     on:
       branch: master
+      condition: -d ./target/doc
     local_dir: ./target/doc
-
-  - provider: script
-    script:
-      - semantic-rs
-    on:
-      branch: master
