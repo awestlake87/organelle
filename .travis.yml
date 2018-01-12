@@ -32,10 +32,13 @@ script:
       travis-cargo --only stable doc
 
 after_success:
-  - travis-cargo --only stable doc-upload
   - |
       travis-cargo --only stable publish -- --token $CARGO_TOKEN ||
       { echo "publish failed!"; exit 1; }
+  - |
+      export VERSION=`cargo pkgid | sed -E 's/.*#(.*:)?(.+)/\2/'` &&
+      git tag v$VERSION &&
+      git push https://awestlake87:$GH_TOKEN@github.com/awestlake87/organelle v$VERSION
 
 deploy:
   - provider: pages
