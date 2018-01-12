@@ -2,6 +2,12 @@
 name = "organelle"
 version = "0.1.0"
 authors = ["Andrew J Westlake <kelixes@gmail.com>"]
+description = "framework for creating emergent AI systems"
+license = "MIT"
+license-file = "LICENSE.md"
+documentation = "https://awestlake87.github.io/organelle/organelle"
+homepage = "https://awestlake87.github.io/organelle"
+repository = "https://awestlake87.github.io/organelle"
 
 [dependencies]
 error-chain = "*"
