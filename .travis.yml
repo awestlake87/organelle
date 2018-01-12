@@ -33,7 +33,9 @@ script:
 
 after_success:
   - travis-cargo --only stable doc-upload
-  - travis-cargo --only stable publish -- --token $CARGO_TOKEN
+  - |
+      travis-cargo --only stable publish -- --token $CARGO_TOKEN ||
+      { echo "publish failed!"; exit 1; }
 
 deploy:
   - provider: pages
