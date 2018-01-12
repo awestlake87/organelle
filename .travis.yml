@@ -31,16 +31,14 @@ script:
       travis-cargo bench &&
       travis-cargo --only stable doc
 
-after_success:
-  - |
-      travis-cargo --only stable publish -- --token $CARGO_TOKEN ||
-      { echo "publish failed!"; exit 1; }
-  - |
-      export VERSION=`cargo pkgid | sed -E 's/.*#(.*:)?(.+)/\2/'` &&
-      git tag v$VERSION &&
-      git push https://awestlake87:$GH_TOKEN@github.com/awestlake87/organelle v$VERSION
-
 deploy:
+  - provider: script
+    skip_cleanup: true
+    on:
+      branch: master
+      condition: -d ./target/doc # check that we're on stable
+    script: scripts/deploy.sh
+
   - provider: pages
     skip_cleanup: true
     github_token: $GH_TOKEN # Set in travis-ci.org dashboard
