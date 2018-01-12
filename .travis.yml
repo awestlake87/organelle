@@ -11,7 +11,7 @@ matrix:
 
 before_script:
   - |
-      cargo install --git https://github.com/semantic-rs/semantic-rs --debug
+      cargo install --git https://github.com/semantic-rs/semantic-rs --debug --force
 
 cache: cargo
 
