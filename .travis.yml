@@ -19,6 +19,10 @@ matrix:
 
 cache: cargo
 
+branches:
+  except:
+    - /^v[0-9]+\.[0-9]+\.[0-9]+/
+
 before_script:
   - |
       pip install 'travis-cargo<0.2' --user &&
