@@ -11,59 +11,59 @@ use tokio_core::reactor;
 
 use super::{
     Result,
-    Protocol,
+    Impulse,
     Handle,
     Effector,
-    Cell,
+    Soma,
     Node,
-    CellWrapper,
-    CellRole,
-    CellMessage,
+    SomaWrapper,
+    SomaSynapse,
+    SomaSignal,
 };
 
-struct OrganelleNodePool<M, R> {
+struct OrganelleNodePool<S, Y> {
     main_hdl:       Handle,
 
-    main:           Box<Node<M, R>>,
+    main:           Box<Node<S, Y>>,
 
-    misc:           HashMap<Handle, Box<Node<M, R>>>,
+    misc:           HashMap<Handle, Box<Node<S, Y>>>,
 }
 
-/// a special cell designed to contain a network of interconnected cells
+/// a special soma designed to contain a network of interconnected somas
 ///
-/// the organelle is created with one cell. this cell is the only cell within the
+/// the organelle is created with one soma. this soma is the only soma within the
 /// organelle that is allowed to communicate or connect to the outside world. it
 /// acts as an entry point for the network, providing essential external data
-/// while keeping implementation-specific data and cells hidden. upon receiving
+/// while keeping implementation-specific data and somas hidden. upon receiving
 /// an update, it has the opportunity to communicate these updates with
-/// external cells.
+/// external somas.
 ///
 /// the intent is to allow organelles to be hierarchical and potentially contain
-/// any number of nested cell networks. in order to do this, the organelle
+/// any number of nested soma networks. in order to do this, the organelle
 /// isolates a group of messages from the larger whole. this is essential for
 /// extensibility and maintainability.
 ///
 /// any organelle can be plugged into any other organelle provided their messages and
-/// constraints can convert between each other using From and Into
-pub struct Organelle<M, R> where
-    M: CellMessage,
-    R: CellRole
+/// dendrites can convert between each other using From and Into
+pub struct Organelle<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse
 {
-    effector:       Option<Effector<M, R>>,
+    effector:       Option<Effector<S, Y>>,
 
     main_hdl:       Handle,
-    connections:    Vec<(Handle, Handle, R)>,
+    connections:    Vec<(Handle, Handle, Y)>,
 
-    nodes:          Rc<RefCell<OrganelleNodePool<M, R>>>,
+    nodes:          Rc<RefCell<OrganelleNodePool<S, Y>>>,
 }
 
-impl<M, R> Organelle<M, R> where
-    M: CellMessage,
-    R: CellRole,
+impl<S, Y> Organelle<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse,
 {
-    /// create a new organelle with input and output cells
+    /// create a new organelle with input and output somas
     pub fn new<L>(main: L) -> Self where
-        L: Cell<Message=M, Role=R> + 'static,
+        L: Soma<Signal=S, Synapse=Y> + 'static,
     {
         let main_hdl = Handle::new_v4();
 
@@ -75,10 +75,10 @@ impl<M, R> Organelle<M, R> where
 
             nodes: Rc::from(
                 RefCell::new(
-                    OrganelleNodePool::<M, R> {
+                    OrganelleNodePool::<S, Y> {
                         main_hdl: main_hdl,
 
-                        main: Box::new(CellWrapper::new(main)),
+                        main: Box::new(SomaWrapper::new(main)),
 
                         misc: HashMap::new()
                     }
@@ -88,19 +88,19 @@ impl<M, R> Organelle<M, R> where
     }
 
 
-    /// add a new cell to the organelle and initialize it
+    /// add a new soma to the organelle and initialize it
     ///
-    /// as long as the cell's message type can convert Into and From the
+    /// as long as the soma's message type can convert Into and From the
     /// organelle's message type, it can be added to the organelle and can
-    /// communicate with any cells that do the same.
-    pub fn add_cell<L>(&mut self, cell: L) -> Handle where
-        L: Cell + 'static,
+    /// communicate with any somas that do the same.
+    pub fn add_soma<L>(&mut self, soma: L) -> Handle where
+        L: Soma + 'static,
 
-        M: From<L::Message> + Into<L::Message> + 'static,
-        L::Message: From<M> + Into<M> + 'static,
+        S: From<L::Signal> + Into<L::Signal> + 'static,
+        L::Signal: From<S> + Into<S> + 'static,
 
-        R: From<L::Role>
-            + Into<L::Role>
+        Y: From<L::Synapse>
+            + Into<L::Synapse>
             + Debug
             + Copy
             + Clone
@@ -109,8 +109,8 @@ impl<M, R> Organelle<M, R> where
             + PartialEq
             + 'static,
 
-        L::Role: From<R>
-            + Into<R>
+        L::Synapse: From<Y>
+            + Into<Y>
             + Debug
             + Copy
             + Clone
@@ -119,7 +119,7 @@ impl<M, R> Organelle<M, R> where
             + PartialEq
             + 'static,
     {
-        let node = Box::new(CellWrapper::new(cell));
+        let node = Box::new(SomaWrapper::new(soma));
         let handle = Handle::new_v4();
 
         (*self.nodes).borrow_mut().misc.insert(handle, node);
@@ -128,16 +128,16 @@ impl<M, R> Organelle<M, R> where
     }
 
     /// connect input to output and update them accordingly
-    pub fn connect(&mut self, input: Handle, output: Handle, role: R) {
+    pub fn connect(&mut self, input: Handle, output: Handle, role: Y) {
         self.connections.push((input, output, role));
     }
 
-    /// get the main cell's handle
+    /// get the main soma's handle
     pub fn get_main_handle(&self) -> Handle {
         self.main_hdl
     }
 
-    fn update_node(&self, hdl: Handle, msg: Protocol<M, R>) -> Result<()> {
+    fn update_node(&self, hdl: Handle, msg: Impulse<S, Y>) -> Result<()> {
         let mut nodes = (*self.nodes).borrow_mut();
 
         if hdl == nodes.main_hdl {
@@ -149,19 +149,19 @@ impl<M, R> Organelle<M, R> where
     }
 
     fn init<T, U>(mut self, effector: Effector<T, U>) -> Result<Self> where
-        M: From<T> + Into<T> + CellMessage,
-        T: From<M> + Into<M> + CellMessage,
+        S: From<T> + Into<T> + SomaSignal,
+        T: From<S> + Into<S> + SomaSignal,
 
-        R: From<U> + Into<U> + CellRole,
-        U: From<R> + Into<R> + CellRole,
+        Y: From<U> + Into<U> + SomaSynapse,
+        U: From<Y> + Into<Y> + SomaSynapse,
     {
-        let organelle_hdl = effector.this_cell;
+        let organelle_hdl = effector.this_soma;
 
         let (queue_tx, queue_rx) = mpsc::channel(100);
 
         self.effector = Some(
             Effector {
-                this_cell: organelle_hdl.clone(),
+                this_soma: organelle_hdl.clone(),
                 sender: queue_tx,
                 reactor: effector.reactor,
             }
@@ -184,9 +184,9 @@ impl<M, R> Organelle<M, R> where
 
         self.update_node(
             main_hdl,
-            Protocol::Init(
+            Impulse::Init(
                 Effector {
-                    this_cell: main_hdl,
+                    this_soma: main_hdl,
                     sender: sender.clone(),
                     reactor: reactor.clone(),
                 }
@@ -195,9 +195,9 @@ impl<M, R> Organelle<M, R> where
 
         for (hdl, node) in (*self.nodes).borrow_mut().misc.iter_mut() {
             node.update(
-                Protocol::Init(
+                Impulse::Init(
                     Effector {
-                        this_cell: *hdl,
+                        this_soma: *hdl,
                         sender: sender.clone(),
                         reactor: reactor.clone(),
                     }
@@ -206,8 +206,8 @@ impl<M, R> Organelle<M, R> where
         }
 
         for &(input, output, role) in &self.connections {
-            self.update_node(input, Protocol::AddOutput(output, role))?;
-            self.update_node(output, Protocol::AddInput(input, role))?;
+            self.update_node(input, Impulse::AddOutput(output, role))?;
+            self.update_node(output, Impulse::AddInput(input, role))?;
         }
 
         let external_sender = effector.sender;
@@ -235,27 +235,27 @@ impl<M, R> Organelle<M, R> where
         {
             let mut nodes = (*self.nodes).borrow_mut();
 
-            nodes.main.update(Protocol::Start)?;
+            nodes.main.update(Impulse::Start)?;
 
             for node in nodes.misc.values_mut() {
-                node.update(Protocol::Start)?;
+                node.update(Impulse::Start)?;
             }
         }
 
         Ok(self)
     }
 
-    fn add_input(self, input: Handle, role: R) -> Result<Self> {
+    fn add_input(self, input: Handle, role: Y) -> Result<Self> {
         (*self.nodes).borrow_mut().main.update
-            (Protocol::AddInput(input, role)
+            (Impulse::AddInput(input, role)
         )?;
 
         Ok(self)
     }
 
-    fn add_output(self, output: Handle, role: R) -> Result<Self> {
+    fn add_output(self, output: Handle, role: Y) -> Result<Self> {
         (*self.nodes).borrow_mut().main.update(
-            Protocol::AddOutput(output, role)
+            Impulse::AddOutput(output, role)
         )?;
 
         Ok(self)
@@ -263,27 +263,27 @@ impl<M, R> Organelle<M, R> where
 
     fn forward<T, U>(
         organelle: Handle,
-        nodes: &mut OrganelleNodePool<M, R>,
-        sender: mpsc::Sender<Protocol<T, U>>,
+        nodes: &mut OrganelleNodePool<S, Y>,
+        sender: mpsc::Sender<Impulse<T, U>>,
         reactor: &reactor::Handle,
-        msg: Protocol<M, R>
+        msg: Impulse<S, Y>
     )
         -> Result<()> where
-            M: From<T> + Into<T> + CellMessage,
-            T: From<M> + Into<M> + CellMessage,
+            S: From<T> + Into<T> + SomaSignal,
+            T: From<S> + Into<S> + SomaSignal,
 
-            R: From<U> + Into<U> + CellRole,
-            U: From<R> + Into<R> + CellRole,
+            Y: From<U> + Into<U> + SomaSynapse,
+            U: From<Y> + Into<Y> + SomaSynapse,
     {
         match msg {
-            Protocol::Payload(src, dest, msg) => {
+            Impulse::Payload(src, dest, msg) => {
                 let actual_src = {
-                    // check if src is the main cell
+                    // check if src is the main soma
                     if src == nodes.main_hdl {
                         // if src is the main node, then it becomes tricky.
                         // these are allowed to send to both internal and
-                        // external cells, so the question becomes whether or
-                        // not to advertise itself as the cell or the organelle
+                        // external somas, so the question becomes whether or
+                        // not to advertise itself as the soma or the organelle
 
                         if dest == nodes.main_hdl
                             || nodes.misc.contains_key(&dest)
@@ -302,18 +302,18 @@ impl<M, R> Organelle<M, R> where
                 };
 
                 if dest == nodes.main_hdl {
-                    nodes.main.update(Protocol::Message(actual_src, msg))?;
+                    nodes.main.update(Impulse::Signal(actual_src, msg))?;
                 }
                 else if let Some(ref mut node) = nodes.misc.get_mut(&dest) {
                     // send to internal node
-                    node.update(Protocol::Message(actual_src, msg))?;
+                    node.update(Impulse::Signal(actual_src, msg))?;
                 }
                 else {
                     // send to external node
                     reactor.spawn(
                         sender.send(
-                            Protocol::<T, U>::convert_protocol(
-                                Protocol::Payload(actual_src, dest, msg)
+                            Impulse::<T, U>::convert_protocol(
+                                Impulse::Payload(actual_src, dest, msg)
                             )
                         )
                             .then(|_| Ok(()))
@@ -321,11 +321,11 @@ impl<M, R> Organelle<M, R> where
                 }
             },
 
-            Protocol::Stop => reactor.spawn(
-                sender.send(Protocol::Stop).then(|_| Ok(()))
+            Impulse::Stop => reactor.spawn(
+                sender.send(Impulse::Stop).then(|_| Ok(()))
             ),
-            Protocol::Err(e) => reactor.spawn(
-                sender.send(Protocol::Err(e)).then(|_| Ok(()))
+            Impulse::Err(e) => reactor.spawn(
+                sender.send(Impulse::Err(e)).then(|_| Ok(()))
             ),
 
             _ => unimplemented!()
@@ -335,26 +335,26 @@ impl<M, R> Organelle<M, R> where
     }
 }
 
-impl<M, R> Cell for Organelle<M, R> where
-    M: CellMessage,
-    R: CellRole,
+impl<S, Y> Soma for Organelle<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse,
 {
-    type Message = M;
-    type Role = R;
+    type Signal = S;
+    type Synapse = Y;
 
-    fn update(self, msg: Protocol<M, R>) -> Result<Self> {
+    fn update(self, msg: Impulse<S, Y>) -> Result<Self> {
         match msg {
-            Protocol::Init(effector) => self.init(effector),
-            Protocol::AddInput(input, role) => self.add_input(
+            Impulse::Init(effector) => self.init(effector),
+            Impulse::AddInput(input, role) => self.add_input(
                 input, role
             ),
-            Protocol::AddOutput(output, role) => self.add_output(
+            Impulse::AddOutput(output, role) => self.add_output(
                 output, role
             ),
 
-            Protocol::Start => self.start(),
-            Protocol::Message(src, msg) => {
-                self.update_node(self.main_hdl, Protocol::Message(src, msg))?;
+            Impulse::Start => self.start(),
+            Impulse::Signal(src, msg) => {
+                self.update_node(self.main_hdl, Impulse::Signal(src, msg))?;
 
                 Ok(self)
             },

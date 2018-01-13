@@ -11,12 +11,12 @@ extern crate tokio_core;
 extern crate uuid;
 
 mod organelle;
-mod cell;
 mod soma;
+mod axon;
 
 pub use organelle::{ Organelle };
-pub use cell::{ Cell, CellMessage, CellRole };
-pub use soma::{ Soma, Constraint, Nucleus, Eukaryote };
+pub use soma::{ Soma, SomaSignal, SomaSynapse };
+pub use axon::{ Axon, Dendrite, Neuron, Sheath };
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -36,47 +36,47 @@ error_chain! {
         Canceled(futures::Canceled) #[doc = "glue for futures::Canceled"];
     }
     errors {
-        /// a cell returned an error when called into
-        CellError {
-            description("an error occurred while calling into a cell"),
-            display("an error occurred while calling into a cell")
+        /// a soma returned an error when called into
+        SomaError {
+            description("an error occurred while calling into a soma"),
+            display("an error occurred while calling into a soma")
         }
     }
 }
 
-/// handle to a cell within the organelle
+/// handle to a soma within the organelle
 pub type Handle = Uuid;
 
 /// a set of protocol messages to be relayed throughout the network
 ///
 /// wraps a user-defined message within the organelle protocol.
-/// 1. a cell is always updated with Init first.
-/// 2. as the organelle is built, the cell will be updated with any inputs or
+/// 1. a soma is always updated with Init first.
+/// 2. as the organelle is built, the soma will be updated with any inputs or
 ///     outputs specified using AddInput and AddOutput.
-/// 3. when the organelle is ready to begin execution, every cell is updated with
+/// 3. when the organelle is ready to begin execution, every soma is updated with
 ///     Start
-/// 4. any messages sent between cells will come through Message
-/// 5. when a cell determines that the organelle should stop, it can issue Stop
+/// 4. any messages sent between somas will come through Signal
+/// 5. when a soma determines that the organelle should stop, it can issue Stop
 ///     and the organelle will exit its event loop.
-pub enum Protocol<M, R> where
-    M: CellMessage,
-    R: CellRole,
+pub enum Impulse<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse,
 {
-    /// initializes a cell with an effector to use
-    Init(Effector<M, R>),
+    /// initializes a soma with an effector to use
+    Init(Effector<S, Y>),
     /// add an input Handle with connection role
-    AddInput(Handle, R),
+    AddInput(Handle, Y),
     /// add an output Handle with connection role
-    AddOutput(Handle, R),
+    AddOutput(Handle, Y),
 
-    /// notifies cell that organelle has begun execution
+    /// notifies soma that organelle has begun execution
     Start,
 
     /// internal use only - used to track source and destination of message
-    Payload(Handle, Handle, M),
+    Payload(Handle, Handle, S),
 
-    /// updates the cell with a user-defined message from source cell Handle
-    Message(Handle, M),
+    /// updates the soma with a user-defined message from source soma Handle
+    Signal(Handle, S),
 
     /// tells the organelle to stop executing
     Stop,
@@ -85,16 +85,16 @@ pub enum Protocol<M, R> where
     Err(Error),
 }
 
-impl<M, R> Protocol<M, R> where
-    M: CellMessage,
-    R: CellRole,
+impl<S, Y> Impulse<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse,
 {
-    fn convert_protocol<T, U>(msg: Protocol<T, U>) -> Self
+    fn convert_protocol<T, U>(msg: Impulse<T, U>) -> Self
         where
-            M: From<T> + Into<T> + 'static,
-            T: From<M> + Into<M> + 'static,
+            S: From<T> + Into<T> + 'static,
+            T: From<S> + Into<S> + 'static,
 
-            R: From<U>
+            Y: From<U>
                 + Into<U>
                 + Debug
                 + Copy
@@ -104,8 +104,8 @@ impl<M, R> Protocol<M, R> where
                 + PartialEq
                 + 'static,
 
-            U: From<R>
-                + Into<R>
+            U: From<Y>
+                + Into<Y>
                 + Debug
                 + Copy
                 + Clone
@@ -115,7 +115,7 @@ impl<M, R> Protocol<M, R> where
                 + 'static,
     {
         match msg {
-            Protocol::Init(effector) => {
+            Impulse::Init(effector) => {
                 let sender = effector.sender;
 
                 let (tx, rx) = mpsc::channel(10);
@@ -123,98 +123,98 @@ impl<M, R> Protocol<M, R> where
                 effector.reactor.spawn(
                     rx.for_each(move |msg| {
                         sender.clone().send(
-                            Protocol::<T, U>::convert_protocol(msg)
+                            Impulse::<T, U>::convert_protocol(msg)
                         )
                             .then(|_| Ok(()))
                     })
                 );
 
-                Protocol::Init(
+                Impulse::Init(
                     Effector {
-                        this_cell: effector.this_cell,
+                        this_soma: effector.this_soma,
                         sender: tx,
                         reactor: effector.reactor,
                     }
                 )
             },
 
-            Protocol::AddInput(input, role) => Protocol::AddInput(
+            Impulse::AddInput(input, role) => Impulse::AddInput(
                 input, role.into()
             ),
-            Protocol::AddOutput(output, role) => Protocol::AddOutput(
+            Impulse::AddOutput(output, role) => Impulse::AddOutput(
                 output, role.into()
             ),
 
-            Protocol::Start => Protocol::Start,
+            Impulse::Start => Impulse::Start,
 
-            Protocol::Payload(src, dest, msg) => Protocol::Payload(
+            Impulse::Payload(src, dest, msg) => Impulse::Payload(
                 src, dest, msg.into()
             ),
-            Protocol::Message(src, msg) => Protocol::Message(
+            Impulse::Signal(src, msg) => Impulse::Signal(
                 src, msg.into()
             ),
 
-            Protocol::Stop => Protocol::Stop,
+            Impulse::Stop => Impulse::Stop,
 
-            Protocol::Err(e) => Protocol::Err(e),
+            Impulse::Err(e) => Impulse::Err(e),
         }
     }
 }
 
-/// the effector is a cell's method of communicating between other cells
+/// the effector is a soma's method of communicating between other somas
 ///
 /// the effector can send a message to any destination, provided you have its
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
-pub struct Effector<M, R> where
-    M: CellMessage,
-    R: CellRole
+pub struct Effector<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse
 {
-    this_cell:      Handle,
-    sender:         mpsc::Sender<Protocol<M, R>>,
+    this_soma:      Handle,
+    sender:         mpsc::Sender<Impulse<S, Y>>,
     reactor:        reactor::Handle,
 }
 
-impl<M, R> Clone for Effector<M, R> where
-    M: CellMessage,
-    R: CellRole
+impl<S, Y> Clone for Effector<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse
 {
     fn clone(&self) -> Self {
         Self {
-            this_cell: self.this_cell,
+            this_soma: self.this_soma,
             sender: self.sender.clone(),
             reactor: self.reactor.clone(),
         }
     }
 }
 
-impl<M, R> Effector<M, R> where
-    M: CellMessage,
-    R: CellRole,
+impl<S, Y> Effector<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse,
 {
-    /// get the Handle associated with the cell that owns this effector
-    pub fn this_cell(&self) -> Handle {
-        self.this_cell
+    /// get the Handle associated with the soma that owns this effector
+    pub fn this_soma(&self) -> Handle {
+        self.this_soma
     }
 
-    /// send a message to dest cell
-    pub fn send(&self, dest: Handle, msg: M) {
+    /// send a message to dest soma
+    pub fn send(&self, dest: Handle, msg: S) {
         self.send_organelle_message(
-            Protocol::Payload(self.this_cell(), dest, msg)
+            Impulse::Payload(self.this_soma(), dest, msg)
         );
     }
 
-    /// send a batch of messages in order to dest cell
-    pub fn send_in_order(&self, dest: Handle, msgs: Vec<M>) {
-        let src = self.this_cell();
+    /// send a batch of messages in order to dest soma
+    pub fn send_in_order(&self, dest: Handle, msgs: Vec<S>) {
+        let src = self.this_soma();
 
         self.spawn(
             self.sender.clone()
                 .send_all(
                     iter_ok(
                         msgs.into_iter()
-                            .map(move |m| Protocol::Payload(src, dest, m))
+                            .map(move |m| Impulse::Payload(src, dest, m))
                     )
                 )
                 .then(|_| Ok(()))
@@ -223,12 +223,12 @@ impl<M, R> Effector<M, R> where
 
     /// stop the organelle
     pub fn stop(&self) {
-        self.send_organelle_message(Protocol::Stop);
+        self.send_organelle_message(Impulse::Stop);
     }
 
     /// stop the organelle because of an error
     pub fn error(&self, e: Error) {
-        self.send_organelle_message(Protocol::Err(e));
+        self.send_organelle_message(Impulse::Err(e));
     }
 
     /// spawn a future on the reactor
@@ -248,37 +248,37 @@ impl<M, R> Effector<M, R> where
         self.reactor.remote().clone()
     }
 
-    fn send_organelle_message(&self, msg: Protocol<M, R>) {
+    fn send_organelle_message(&self, msg: Impulse<S, Y>) {
         self.spawn(self.sender.clone().send(msg).then(|_| Ok(())));
     }
 }
 
 
 
-trait Node<M, R> where
-    M: CellMessage,
-    R: CellRole,
+trait Node<S, Y> where
+    S: SomaSignal,
+    Y: SomaSynapse,
 {
-    fn update(&mut self, msg: Protocol<M, R>) -> Result<()>;
+    fn update(&mut self, msg: Impulse<S, Y>) -> Result<()>;
 }
 
-struct CellWrapper<L, M, R>(Option<L>, PhantomData<M>, PhantomData<R>);
+struct SomaWrapper<L, S, Y>(Option<L>, PhantomData<S>, PhantomData<Y>);
 
-impl<L, M, R> CellWrapper<L, M, R> where
-    L: Cell<Message=M, Role=R>,
+impl<L, S, Y> SomaWrapper<L, S, Y> where
+    L: Soma<Signal=S, Synapse=Y>,
 
-    M: CellMessage,
-    R: CellRole
+    S: SomaSignal,
+    Y: SomaSynapse
 {
-    fn new(cell: L) -> Self {
-        CellWrapper::<L, M, R>(
-            Some(cell), PhantomData::default(), PhantomData::default()
+    fn new(soma: L) -> Self {
+        SomaWrapper::<L, S, Y>(
+            Some(soma), PhantomData::default(), PhantomData::default()
         )
     }
 }
 
-impl<L, IM, OM, IR, OR> Node<OM, OR> for CellWrapper<L, IM, IR> where
-    L: Cell<Message=IM, Role=IR>,
+impl<L, IM, OM, IR, OR> Node<OM, OR> for SomaWrapper<L, IM, IR> where
+    L: Soma<Signal=IM, Synapse=IR>,
 
     IM: From<OM> + Into<OM> + 'static,
     OM: From<IM> + Into<IM> + 'static,
@@ -303,14 +303,14 @@ impl<L, IM, OM, IR, OR> Node<OM, OR> for CellWrapper<L, IM, IR> where
         + PartialEq
         + 'static,
 {
-    fn update(&mut self, msg: Protocol<OM, OR>) -> Result<()> {
+    fn update(&mut self, msg: Impulse<OM, OR>) -> Result<()> {
         if self.0.is_some() {
-            let cell = mem::replace(&mut self.0, None)
+            let soma = mem::replace(&mut self.0, None)
                 .unwrap()
-                .update(Protocol::<IM, IR>::convert_protocol(msg))?
+                .update(Impulse::<IM, IR>::convert_protocol(msg))?
             ;
 
-            self.0 = Some(cell);
+            self.0 = Some(soma);
         }
 
         Ok(())

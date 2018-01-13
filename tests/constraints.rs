@@ -6,44 +6,44 @@ extern crate organelle;
 
 use organelle::*;
 
-enum TestMessage {
+enum TestSignal {
     Something,
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum TestRole {
+enum TestSynapse {
     Something,
 }
 
-struct GiveSomethingCell {
-    soma:           Soma<TestMessage, TestRole>,
+struct GiveSomethingSoma {
+    soma:           Axon<TestSignal, TestSynapse>,
 }
 
-impl GiveSomethingCell {
+impl GiveSomethingSoma {
     fn new() -> Result<Self> {
         Ok(
             Self {
-                soma: Soma::new(
+                soma: Axon::new(
                     vec![ ],
-                    vec![ Constraint::RequireOne(TestRole::Something) ]
+                    vec![ Dendrite::RequireOne(TestSynapse::Something) ]
                 )?
             }
         )
     }
 }
 
-impl Cell for GiveSomethingCell {
-    type Message = TestMessage;
-    type Role = TestRole;
+impl Soma for GiveSomethingSoma {
+    type Signal = TestSignal;
+    type Synapse = TestSynapse;
 
-    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
         -> Result<Self>
     {
         if let Some(msg) = self.soma.update(msg)? {
             match msg {
-                Protocol::Start => {
+                Impulse::Start => {
                     self.soma.send_req_output(
-                        TestRole::Something, TestMessage::Something
+                        TestSynapse::Something, TestSignal::Something
                     )?;
                 },
                 _ => bail!("unexpected message"),
@@ -54,16 +54,16 @@ impl Cell for GiveSomethingCell {
     }
 }
 
-struct TakeSomethingCell {
-    soma:           Soma<TestMessage, TestRole>,
+struct TakeSomethingSoma {
+    soma:           Axon<TestSignal, TestSynapse>,
 }
 
-impl TakeSomethingCell {
+impl TakeSomethingSoma {
     fn new() -> Result<Self> {
         Ok(
             Self {
-                soma: Soma::new(
-                    vec![ Constraint::RequireOne(TestRole::Something) ],
+                soma: Axon::new(
+                    vec![ Dendrite::RequireOne(TestSynapse::Something) ],
                     vec![ ]
                 )?
             }
@@ -71,18 +71,18 @@ impl TakeSomethingCell {
     }
 }
 
-impl Cell for TakeSomethingCell {
-    type Message = TestMessage;
-    type Role = TestRole;
+impl Soma for TakeSomethingSoma {
+    type Signal = TestSignal;
+    type Synapse = TestSynapse;
 
-    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
         -> Result<Self>
     {
         if let Some(msg) = self.soma.update(msg)? {
             match msg {
-                Protocol::Start => (),
+                Impulse::Start => (),
 
-                Protocol::Message(_, TestMessage::Something) => {
+                Impulse::Signal(_, TestSignal::Something) => {
                     self.soma.effector()?.stop();
                 },
 
@@ -96,18 +96,18 @@ impl Cell for TakeSomethingCell {
 
 #[test]
 fn test_invalid_input() {
-    let mut organelle = Organelle::new(GiveSomethingCell::new().unwrap());
+    let mut organelle = Organelle::new(GiveSomethingSoma::new().unwrap());
 
     let give1 = organelle.get_main_handle();
-    let give2 = organelle.add_cell(GiveSomethingCell::new().unwrap());
+    let give2 = organelle.add_soma(GiveSomethingSoma::new().unwrap());
 
-    organelle.connect(give1, give2, TestRole::Something);
+    organelle.connect(give1, give2, TestSynapse::Something);
 
     if let Err(e) = organelle.run() {
         eprintln!("error {:#?}", e)
     }
     else {
-        panic!("GiveSomethingCell should not accept this input")
+        panic!("GiveSomethingSoma should not accept this input")
     }
 }
 
@@ -115,30 +115,30 @@ fn test_invalid_input() {
 fn test_require_one() {
     // make sure require one works as intended
     {
-        let mut organelle = Organelle::new(GiveSomethingCell::new().unwrap());
+        let mut organelle = Organelle::new(GiveSomethingSoma::new().unwrap());
 
         let give = organelle.get_main_handle();
-        let take = organelle.add_cell(TakeSomethingCell::new().unwrap());
+        let take = organelle.add_soma(TakeSomethingSoma::new().unwrap());
 
-        organelle.connect(give, take, TestRole::Something);
+        organelle.connect(give, take, TestSynapse::Something);
 
         organelle.run().unwrap();
     }
 
     // make sure require one fails as intended
     {
-        if let Err(e) = TakeSomethingCell::new().unwrap().run() {
+        if let Err(e) = TakeSomethingSoma::new().unwrap().run() {
             eprintln!("error {:#?}", e)
         }
         else {
-            panic!("TakeSomethingCell has no input, so it should fail")
+            panic!("TakeSomethingSoma has no input, so it should fail")
         }
 
-        if let Err(e) = GiveSomethingCell::new().unwrap().run() {
+        if let Err(e) = GiveSomethingSoma::new().unwrap().run() {
             eprintln!("error {:#?}", e)
         }
         else {
-            panic!("GiveSomethingCell has no output, so it should fail")
+            panic!("GiveSomethingSoma has no output, so it should fail")
         }
     }
 }

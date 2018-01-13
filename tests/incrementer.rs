@@ -7,15 +7,15 @@ extern crate organelle;
 use organelle::*;
 
 #[derive(Debug)]
-enum IncrementerMessage {
+enum IncrementerSignal {
     Increment,
     Ack,
 }
 
-impl From<CounterMessage> for IncrementerMessage {
-    fn from(msg: CounterMessage) -> IncrementerMessage {
+impl From<CounterSignal> for IncrementerSignal {
+    fn from(msg: CounterSignal) -> IncrementerSignal {
         match msg {
-            CounterMessage::Ack => IncrementerMessage::Ack,
+            CounterSignal::Ack => IncrementerSignal::Ack,
             msg @ _ => panic!(
                 "counter does not support {:#?}", msg
             ),
@@ -24,34 +24,34 @@ impl From<CounterMessage> for IncrementerMessage {
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum IncrementerRole {
+enum IncrementerSynapse {
     Incrementer,
     Counter,
 }
 
-impl From<CounterRole> for IncrementerRole {
-    fn from(c: CounterRole) -> IncrementerRole {
+impl From<CounterSynapse> for IncrementerSynapse {
+    fn from(c: CounterSynapse) -> IncrementerSynapse {
         match c {
-            CounterRole::Incrementer => IncrementerRole::Incrementer,
-            CounterRole::Counter => IncrementerRole::Counter,
+            CounterSynapse::Incrementer => IncrementerSynapse::Incrementer,
+            CounterSynapse::Counter => IncrementerSynapse::Counter,
         }
     }
 }
 
-type IncrementerSoma = Soma<IncrementerMessage, IncrementerRole>;
+type IncrementerAxon = Axon<IncrementerSignal, IncrementerSynapse>;
 
-struct IncrementerCell {
-    soma:       IncrementerSoma,
+struct IncrementerSoma {
+    soma:       IncrementerAxon,
 }
 
-impl IncrementerCell {
+impl IncrementerSoma {
     fn new() -> Result<Self> {
         Ok(
             Self {
-                soma: IncrementerSoma::new(
+                soma: IncrementerAxon::new(
                     vec![ ],
                     vec![
-                        Constraint::RequireOne(IncrementerRole::Incrementer)
+                        Dendrite::RequireOne(IncrementerSynapse::Incrementer)
                     ]
                 )?,
             }
@@ -59,26 +59,26 @@ impl IncrementerCell {
     }
 }
 
-impl Cell for IncrementerCell {
-    type Message = IncrementerMessage;
-    type Role = IncrementerRole;
+impl Soma for IncrementerSoma {
+    type Signal = IncrementerSignal;
+    type Synapse = IncrementerSynapse;
 
-    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
         -> Result<Self>
     {
         if let Some(msg) = self.soma.update(msg)? {
             match msg {
-                Protocol::Start => {
+                Impulse::Start => {
                     self.soma.send_req_output(
-                        IncrementerRole::Incrementer,
-                        IncrementerMessage::Increment
+                        IncrementerSynapse::Incrementer,
+                        IncrementerSignal::Increment
                     )?;
                 },
 
-                Protocol::Message(_, IncrementerMessage::Ack) => {
+                Impulse::Signal(_, IncrementerSignal::Ack) => {
                     self.soma.send_req_output(
-                        IncrementerRole::Incrementer,
-                        IncrementerMessage::Increment
+                        IncrementerSynapse::Incrementer,
+                        IncrementerSignal::Increment
                     )?;
                 },
 
@@ -91,15 +91,15 @@ impl Cell for IncrementerCell {
 }
 
 #[derive(Debug)]
-enum CounterMessage {
+enum CounterSignal {
     BumpCounter,
     Ack,
 }
 
-impl From<IncrementerMessage> for CounterMessage {
-    fn from(msg: IncrementerMessage) -> CounterMessage {
+impl From<IncrementerSignal> for CounterSignal {
+    fn from(msg: IncrementerSignal) -> CounterSignal {
         match msg {
-            IncrementerMessage::Increment => CounterMessage::BumpCounter,
+            IncrementerSignal::Increment => CounterSignal::BumpCounter,
             msg @ _ => panic!(
                 "counter does not support {:#?}", msg
             ),
@@ -108,34 +108,34 @@ impl From<IncrementerMessage> for CounterMessage {
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-enum CounterRole {
+enum CounterSynapse {
     Incrementer,
     Counter,
 }
 
-impl From<IncrementerRole> for CounterRole {
-    fn from(role: IncrementerRole) -> CounterRole {
+impl From<IncrementerSynapse> for CounterSynapse {
+    fn from(role: IncrementerSynapse) -> CounterSynapse {
         match role {
-            IncrementerRole::Incrementer => CounterRole::Incrementer,
-            IncrementerRole::Counter => CounterRole::Counter,
+            IncrementerSynapse::Incrementer => CounterSynapse::Incrementer,
+            IncrementerSynapse::Counter => CounterSynapse::Counter,
         }
     }
 }
 
-type CounterSoma = Soma<CounterMessage, CounterRole>;
+type CounterAxon = Axon<CounterSignal, CounterSynapse>;
 
-struct CounterCell {
-    soma: CounterSoma,
+struct CounterSoma {
+    soma: CounterAxon,
 
     counter: u32
 }
 
-impl CounterCell {
+impl CounterSoma {
     fn new() -> Result<Self> {
         Ok(
             Self {
-                soma: CounterSoma::new(
-                    vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
+                soma: CounterAxon::new(
+                    vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
                     vec![ ]
                 )?,
 
@@ -145,24 +145,24 @@ impl CounterCell {
     }
 }
 
-impl Cell for CounterCell {
-    type Message = CounterMessage;
-    type Role = CounterRole;
+impl Soma for CounterSoma {
+    type Signal = CounterSignal;
+    type Synapse = CounterSynapse;
 
-    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
         -> Result<Self>
     {
         if let Some(msg) = self.soma.update(msg)? {
             match msg {
-                Protocol::Start => (),
+                Impulse::Start => (),
 
-                Protocol::Message(_, CounterMessage::BumpCounter) => {
+                Impulse::Signal(_, CounterSignal::BumpCounter) => {
                     if self.counter < 5 {
                         println!("counter increment");
 
                         self.counter += 1;
                         self.soma.send_req_input(
-                            CounterRole::Incrementer, CounterMessage::Ack
+                            CounterSynapse::Incrementer, CounterSignal::Ack
                         )?;
                     }
                     else {
@@ -179,57 +179,57 @@ impl Cell for CounterCell {
     }
 }
 
-struct ForwarderCell {
-    soma: CounterSoma,
+struct ForwarderSoma {
+    soma: CounterAxon,
 }
 
-impl ForwarderCell {
+impl ForwarderSoma {
     fn new() -> Result<Self> {
         Ok(
             Self {
-                soma: CounterSoma::new(
-                    vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
-                    vec![ Constraint::RequireOne(CounterRole::Incrementer) ],
+                soma: CounterAxon::new(
+                    vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
+                    vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
                 )?,
             }
         )
     }
 }
 
-impl Cell for ForwarderCell {
-    type Message = CounterMessage;
-    type Role = CounterRole;
+impl Soma for ForwarderSoma {
+    type Signal = CounterSignal;
+    type Synapse = CounterSynapse;
 
-    fn update(mut self, msg: Protocol<Self::Message, Self::Role>)
+    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
         -> Result<Self>
     {
         if let Some(msg) = self.soma.update(msg)? {
             match msg {
-                Protocol::Start => (),
+                Impulse::Start => (),
 
-                Protocol::Message(src, msg) => {
-                    if src == self.soma.req_input(CounterRole::Incrementer)? {
+                Impulse::Signal(src, msg) => {
+                    if src == self.soma.req_input(CounterSynapse::Incrementer)? {
                         println!(
                             "forwarding input {:#?} through {}",
                             msg,
-                            self.soma.effector()?.this_cell()
+                            self.soma.effector()?.this_soma()
                         );
 
                         self.soma.send_req_output(
-                            CounterRole::Incrementer, msg
+                            CounterSynapse::Incrementer, msg
                         )?;
                     }
                     else if
-                        src == self.soma.req_output(CounterRole::Incrementer)?
+                        src == self.soma.req_output(CounterSynapse::Incrementer)?
                     {
                         println!(
                             "forwarding output {:#?} through {}",
                             msg,
-                            self.soma.effector()?.this_cell()
+                            self.soma.effector()?.this_soma()
                         );
 
                         self.soma.send_req_input(
-                            CounterRole::Incrementer, msg
+                            CounterSynapse::Incrementer, msg
                         )?;
                     }
                 },
@@ -244,56 +244,56 @@ impl Cell for ForwarderCell {
 
 #[test]
 fn test_organelle() {
-    let mut organelle = Organelle::new(IncrementerCell::new().unwrap());
+    let mut organelle = Organelle::new(IncrementerSoma::new().unwrap());
 
-    let counter = organelle.add_cell(CounterCell::new().unwrap());
+    let counter = organelle.add_soma(CounterSoma::new().unwrap());
 
     let main = organelle.get_main_handle();
     println!("organelle {}", main);
-    organelle.connect(main, counter, IncrementerRole::Incrementer);
+    organelle.connect(main, counter, IncrementerSynapse::Incrementer);
 
     organelle.run().unwrap();
 }
 
 #[test]
 fn test_sub_organelle() {
-    let mut counter_organelle = Organelle::new(ForwarderCell::new().unwrap());
+    let mut counter_organelle = Organelle::new(ForwarderSoma::new().unwrap());
 
     let forwarder = counter_organelle.get_main_handle();
-    let counter = counter_organelle.add_cell(CounterCell::new().unwrap());
+    let counter = counter_organelle.add_soma(CounterSoma::new().unwrap());
 
-    counter_organelle.connect(forwarder, counter, CounterRole::Incrementer);
+    counter_organelle.connect(forwarder, counter, CounterSynapse::Incrementer);
 
-    let mut inc_organelle = Organelle::new(IncrementerCell::new().unwrap());
+    let mut inc_organelle = Organelle::new(IncrementerSoma::new().unwrap());
 
     let incrementer = inc_organelle.get_main_handle();
-    let counter = inc_organelle.add_cell(counter_organelle);
+    let counter = inc_organelle.add_soma(counter_organelle);
     // connect the incrementer to the counter organelle
     inc_organelle.connect(
-        incrementer, counter, IncrementerRole::Incrementer
+        incrementer, counter, IncrementerSynapse::Incrementer
     );
 
     inc_organelle.run().unwrap();
 }
 
-struct InitErrorCell {
+struct InitErrorSoma {
 
 }
 
-impl InitErrorCell {
+impl InitErrorSoma {
     fn new() -> Self {
         Self { }
     }
 }
 
-impl Cell for InitErrorCell {
-    type Message = IncrementerMessage;
-    type Role = IncrementerRole;
+impl Soma for InitErrorSoma {
+    type Signal = IncrementerSignal;
+    type Synapse = IncrementerSynapse;
 
-    fn update(self, msg: Protocol<Self::Message, Self::Role>) -> Result<Self> {
+    fn update(self, msg: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         match msg {
-            Protocol::Init(effector) => {
-                effector.error("a cell error!".into());
+            Impulse::Init(effector) => {
+                effector.error("a soma error!".into());
 
                 Ok(self)
             },
@@ -303,36 +303,36 @@ impl Cell for InitErrorCell {
     }
 }
 
-struct UpdateErrorCell {
+struct UpdateErrorSoma {
 
 }
 
-impl UpdateErrorCell {
+impl UpdateErrorSoma {
     fn new() -> Self {
         Self { }
     }
 }
 
-impl Cell for UpdateErrorCell {
-    type Message = IncrementerMessage;
-    type Role = IncrementerRole;
+impl Soma for UpdateErrorSoma {
+    type Signal = IncrementerSignal;
+    type Synapse = IncrementerSynapse;
 
-    fn update(self, _: Protocol<Self::Message, Self::Role>) -> Result<Self> {
+    fn update(self, _: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         bail!("update failed")
     }
 }
 
 #[test]
-fn test_cell_error() {
-    if let Ok(_) = InitErrorCell::new().run() {
-        panic!("cell init was supposed to fail");
+fn test_soma_error() {
+    if let Ok(_) = InitErrorSoma::new().run() {
+        panic!("soma init was supposed to fail");
     }
 
-    if let Ok(_) = UpdateErrorCell::new().run() {
-        panic!("cell update was supposed to fail");
+    if let Ok(_) = UpdateErrorSoma::new().run() {
+        panic!("soma update was supposed to fail");
     }
 
-    if let Ok(_) = Organelle::new(UpdateErrorCell { }).run() {
+    if let Ok(_) = Organelle::new(UpdateErrorSoma { }).run() {
         panic!("organelle updates were supposed to fail");
     }
 }
