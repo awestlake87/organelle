@@ -38,55 +38,52 @@ impl From<CounterSynapse> for IncrementerSynapse {
     }
 }
 
-type IncrementerAxon = Axon<IncrementerSignal, IncrementerSynapse>;
-
-struct IncrementerSoma {
-    soma:       IncrementerAxon,
-}
+struct IncrementerSoma;
 
 impl IncrementerSoma {
-    fn new() -> Result<Self> {
-        Ok(
-            Self {
-                soma: IncrementerAxon::new(
-                    vec![ ],
-                    vec![
-                        Dendrite::RequireOne(IncrementerSynapse::Incrementer)
-                    ]
-                )?,
-            }
+    fn sheath() -> Result<Sheath<Self>> {
+        Sheath::new(
+            Self { },
+            vec![ ],
+            vec![
+                Dendrite::RequireOne(IncrementerSynapse::Incrementer)
+            ],
         )
     }
 }
 
-impl Soma for IncrementerSoma {
+impl Neuron for IncrementerSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
 
-    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
+    fn update(
+        self,
+        axon: &Axon<Self::Signal, Self::Synapse>,
+        msg: Impulse<Self::Signal, Self::Synapse>,
+    )
         -> Result<Self>
     {
-        if let Some(msg) = self.soma.update(msg)? {
-            match msg {
-                Impulse::Start => {
-                    self.soma.send_req_output(
-                        IncrementerSynapse::Incrementer,
-                        IncrementerSignal::Increment
-                    )?;
-                },
+        match msg {
+            Impulse::Start => {
+                axon.send_req_output(
+                    IncrementerSynapse::Incrementer,
+                    IncrementerSignal::Increment
+                )?;
 
-                Impulse::Signal(_, IncrementerSignal::Ack) => {
-                    self.soma.send_req_output(
-                        IncrementerSynapse::Incrementer,
-                        IncrementerSignal::Increment
-                    )?;
-                },
+                Ok(self)
+            },
 
-                _ => bail!("unexpected message"),
-            }
+            Impulse::Signal(_, IncrementerSignal::Ack) => {
+                axon.send_req_output(
+                    IncrementerSynapse::Incrementer,
+                    IncrementerSignal::Increment
+                )?;
+
+                Ok(self)
+            },
+
+            _ => bail!("unexpected message"),
         }
-
-        Ok(self)
     }
 }
 
@@ -122,131 +119,121 @@ impl From<IncrementerSynapse> for CounterSynapse {
     }
 }
 
-type CounterAxon = Axon<CounterSignal, CounterSynapse>;
-
 struct CounterSoma {
-    soma: CounterAxon,
-
     counter: u32
 }
 
 impl CounterSoma {
-    fn new() -> Result<Self> {
-        Ok(
-            Self {
-                soma: CounterAxon::new(
-                    vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
-                    vec![ ]
-                )?,
-
-                counter: 0
-            }
+    fn sheath() -> Result<Sheath<Self>> {
+        Sheath::new(
+            Self { counter: 0 },
+            vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
+            vec![ ],
         )
     }
 }
 
-impl Soma for CounterSoma {
+impl Neuron for CounterSoma {
     type Signal = CounterSignal;
     type Synapse = CounterSynapse;
 
-    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
+    fn update(
+        mut self,
+        axon: &Axon<Self::Signal, Self::Synapse>,
+        msg: Impulse<Self::Signal, Self::Synapse>,
+    )
         -> Result<Self>
     {
-        if let Some(msg) = self.soma.update(msg)? {
-            match msg {
-                Impulse::Start => (),
+        match msg {
+            Impulse::Start => Ok(self),
 
-                Impulse::Signal(_, CounterSignal::BumpCounter) => {
-                    if self.counter < 5 {
-                        println!("counter increment");
+            Impulse::Signal(_, CounterSignal::BumpCounter) => {
+                if self.counter < 5 {
+                    println!("counter increment");
 
-                        self.counter += 1;
-                        self.soma.send_req_input(
-                            CounterSynapse::Incrementer, CounterSignal::Ack
-                        )?;
-                    }
-                    else {
-                        println!("stop");
-                        self.soma.effector()?.stop();
-                    }
-                },
+                    self.counter += 1;
+                    axon.send_req_input(
+                        CounterSynapse::Incrementer, CounterSignal::Ack
+                    )?;
+                }
+                else {
+                    println!("stop");
+                    axon.effector()?.stop();
+                }
 
-                _ => bail!("unexpected message"),
-            }
+                Ok(self)
+            },
+
+            _ => bail!("unexpected message"),
         }
-
-        Ok(self)
     }
 }
 
-struct ForwarderSoma {
-    soma: CounterAxon,
-}
+struct ForwarderSoma;
 
 impl ForwarderSoma {
-    fn new() -> Result<Self> {
-        Ok(
-            Self {
-                soma: CounterAxon::new(
-                    vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
-                    vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
-                )?,
-            }
+    fn sheath() -> Result<Sheath<Self>> {
+        Sheath::new(
+            Self { },
+            vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
+            vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
         )
     }
 }
 
-impl Soma for ForwarderSoma {
+impl Neuron for ForwarderSoma {
     type Signal = CounterSignal;
     type Synapse = CounterSynapse;
 
-    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
+    fn update(
+        self,
+        axon: &Axon<Self::Signal, Self::Synapse>,
+        msg: Impulse<Self::Signal, Self::Synapse>,
+    )
         -> Result<Self>
     {
-        if let Some(msg) = self.soma.update(msg)? {
-            match msg {
-                Impulse::Start => (),
+        match msg {
+            Impulse::Start => Ok(self),
 
-                Impulse::Signal(src, msg) => {
-                    if src == self.soma.req_input(CounterSynapse::Incrementer)? {
-                        println!(
-                            "forwarding input {:#?} through {}",
-                            msg,
-                            self.soma.effector()?.this_soma()
-                        );
+            Impulse::Signal(src, msg) => {
+                if src == axon.req_input(CounterSynapse::Incrementer)? {
+                    println!(
+                        "forwarding input {:#?} through {}",
+                        msg,
+                        axon.effector()?.this_soma()
+                    );
 
-                        self.soma.send_req_output(
-                            CounterSynapse::Incrementer, msg
-                        )?;
-                    }
-                    else if
-                        src == self.soma.req_output(CounterSynapse::Incrementer)?
-                    {
-                        println!(
-                            "forwarding output {:#?} through {}",
-                            msg,
-                            self.soma.effector()?.this_soma()
-                        );
+                    axon.send_req_output(
+                        CounterSynapse::Incrementer, msg
+                    )?;
+                }
+                else if
+                    src == axon.req_output(CounterSynapse::Incrementer)?
+                {
+                    println!(
+                        "forwarding output {:#?} through {}",
+                        msg,
+                        axon.effector()?.this_soma()
+                    );
 
-                        self.soma.send_req_input(
-                            CounterSynapse::Incrementer, msg
-                        )?;
-                    }
-                },
+                    axon.send_req_input(
+                        CounterSynapse::Incrementer, msg
+                    )?;
+                }
 
-                _ => bail!("unexpected message")
-            }
+                Ok(self)
+            },
+
+            _ => bail!("unexpected message")
         }
-
-        Ok(self)
     }
 }
 
 #[test]
 fn test_organelle() {
-    let mut organelle = Organelle::new(IncrementerSoma::new().unwrap());
+    let mut organelle = Organelle::new(IncrementerSoma::sheath().unwrap());
 
-    let counter = organelle.add_soma(CounterSoma::new().unwrap());
+    let counter = organelle.add_soma(CounterSoma::sheath().unwrap());
 
     let main = organelle.get_main_handle();
     println!("organelle {}", main);
@@ -257,14 +244,16 @@ fn test_organelle() {
 
 #[test]
 fn test_sub_organelle() {
-    let mut counter_organelle = Organelle::new(ForwarderSoma::new().unwrap());
+    let mut counter_organelle = Organelle::new(
+        ForwarderSoma::sheath().unwrap()
+    );
 
     let forwarder = counter_organelle.get_main_handle();
-    let counter = counter_organelle.add_soma(CounterSoma::new().unwrap());
+    let counter = counter_organelle.add_soma(CounterSoma::sheath().unwrap());
 
     counter_organelle.connect(forwarder, counter, CounterSynapse::Incrementer);
 
-    let mut inc_organelle = Organelle::new(IncrementerSoma::new().unwrap());
+    let mut inc_organelle = Organelle::new(IncrementerSoma::sheath().unwrap());
 
     let incrementer = inc_organelle.get_main_handle();
     let counter = inc_organelle.add_soma(counter_organelle);

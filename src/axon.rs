@@ -276,19 +276,19 @@ impl<S, Y> Axon<S, Y> where
 }
 
 /// soma used to wrap a Axon and a soma specialized with Neuron
-pub struct Sheath<S: SomaSignal, Y: SomaSynapse, N> where
-    N: Neuron<Signal=S, Synapse=Y> + Sized + 'static
+pub struct Sheath<N> where
+    N: Neuron + Sized + 'static
 {
-    axon:       Axon<S, Y>,
+    axon:       Axon<N::Signal, N::Synapse>,
     nucleus:    N,
 }
 
-impl<S: SomaSignal, Y: SomaSynapse, N> Sheath<S, Y, N> where
-    N: Neuron<Signal=S, Synapse=Y> + Sized + 'static
-{
+impl<N> Sheath<N> where N: Neuron + Sized + 'static {
     /// wrap a nucleus and constrain the axon
     pub fn new(
-        nucleus: N, inputs: Vec<Dendrite<Y>>, outputs: Vec<Dendrite<Y>>
+        nucleus: N,
+        inputs: Vec<Dendrite<N::Synapse>>,
+        outputs: Vec<Dendrite<N::Synapse>>,
     )
         -> Result<Self>
     {
@@ -301,11 +301,9 @@ impl<S: SomaSignal, Y: SomaSynapse, N> Sheath<S, Y, N> where
     }
 }
 
-impl<S: SomaSignal, Y: SomaSynapse, N> Soma for Sheath<S, Y, N> where
-    N: Neuron<Signal=S, Synapse=Y>
-{
-    type Signal = S;
-    type Synapse = Y;
+impl<N> Soma for Sheath<N> where N: Neuron {
+    type Signal = N::Signal;
+    type Synapse = N::Synapse;
 
     fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
         -> Result<Self>
