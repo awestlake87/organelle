@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use futures::prelude::*;
-use futures::sync::{ mpsc };
+use futures::unsync::{ mpsc };
 use tokio_core::reactor;
 
 use super::{
@@ -11,14 +11,14 @@ use super::{
 };
 
 /// defines the collection of traits necessary to act as a soma message
-pub trait SomaSignal: 'static { }
+pub trait Signal: 'static { }
 
-impl<T> SomaSignal for T where T: 'static { }
+impl<T> Signal for T where T: 'static { }
 
 /// defines the collection of traits necessary to act as a soma role
-pub trait SomaSynapse: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static { }
+pub trait Synapse: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static { }
 
-impl<T> SomaSynapse for T where
+impl<T> Synapse for T where
     T: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
 { }
 
@@ -28,9 +28,9 @@ impl<T> SomaSynapse for T where
 /// user-defined roles for connections
 pub trait Soma: Sized {
     /// user-defined message to be passed between somas
-    type Signal: SomaSignal;
+    type Signal: Signal;
     /// user-defined roles for connections
-    type Synapse: SomaSynapse;
+    type Synapse: Synapse;
 
     /// apply any changes to the soma's state as a result of _msg
     fn update(self, _msg: Impulse<Self::Signal, Self::Synapse>)

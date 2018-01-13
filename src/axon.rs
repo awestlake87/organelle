@@ -2,14 +2,12 @@
 use std::collections::HashMap;
 
 use super::{
-    Result, Impulse, Effector, Handle, Soma, SomaSignal, SomaSynapse
+    Result, Impulse, Effector, Handle, Soma, Signal, Synapse
 };
 
 /// defines dendrites on how connections can be made
 #[derive(Debug, Copy, Clone)]
-pub enum Dendrite<Y> where
-    Y: SomaSynapse,
-{
+pub enum Dendrite<Y: Synapse> {
     /// require one connection with the specified role
     RequireOne(Y),
 
@@ -26,20 +24,14 @@ enum DendriteHandle {
 type DendriteMap<Y> = HashMap<Y, (DendriteHandle, Dendrite<Y>)>;
 
 /// provides core convenience functions with little boilerplate
-pub struct Axon<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+pub struct Axon<S: Signal, Y: Synapse> {
     effector:               Option<Effector<S, Y>>,
 
     inputs:                 DendriteMap<Y>,
     outputs:                DendriteMap<Y>,
 }
 
-impl<S, Y> Axon<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+impl<S: Signal, Y: Synapse> Axon<S, Y> {
     /// new axon with dendrites and default user-defined state
     pub fn new(inputs: Vec<Dendrite<Y>>, outputs: Vec<Dendrite<Y>>)
         -> Result<Self>
@@ -322,9 +314,9 @@ impl<N> Soma for Sheath<N> where N: Neuron {
 /// a specialized soma meant to ensure the Axon is always handled correctly
 pub trait Neuron: Sized {
     /// a message that was not handled by the Axon
-    type Signal: SomaSignal;
+    type Signal: Signal;
     /// the role a connection between somas takes
-    type Synapse: SomaSynapse;
+    type Synapse: Synapse;
 
     /// update the nucleus with the Axon and soma message
     fn update(

@@ -15,17 +15,14 @@ mod soma;
 mod axon;
 
 pub use organelle::{ Organelle };
-pub use soma::{ Soma, SomaSignal, SomaSynapse };
+pub use soma::{ Soma, Signal, Synapse };
 pub use axon::{ Axon, Dendrite, Neuron, Sheath };
 
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::marker::PhantomData;
 use std::mem;
 
 use futures::prelude::*;
 use futures::stream::iter_ok;
-use futures::sync::mpsc;
+use futures::unsync::mpsc;
 use tokio_core::reactor;
 use uuid::Uuid;
 
@@ -58,10 +55,7 @@ pub type Handle = Uuid;
 /// 4. any messages sent between somas will come through Signal
 /// 5. when a soma determines that the organelle should stop, it can issue Stop
 ///     and the organelle will exit its event loop.
-pub enum Impulse<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+pub enum Impulse<S: Signal, Y: Synapse> {
     /// initializes a soma with an effector to use
     Init(Effector<S, Y>),
     /// add an input Handle with connection role
@@ -85,34 +79,14 @@ pub enum Impulse<S, Y> where
     Err(Error),
 }
 
-impl<S, Y> Impulse<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+impl<S: Signal, Y: Synapse> Impulse<S, Y> {
     fn convert_protocol<T, U>(msg: Impulse<T, U>) -> Self
         where
-            S: From<T> + Into<T> + 'static,
-            T: From<S> + Into<S> + 'static,
+            S: From<T> + Into<T>,
+            T: From<S> + Into<S> + Signal,
 
-            Y: From<U>
-                + Into<U>
-                + Debug
-                + Copy
-                + Clone
-                + Hash
-                + Eq
-                + PartialEq
-                + 'static,
-
-            U: From<Y>
-                + Into<Y>
-                + Debug
-                + Copy
-                + Clone
-                + Hash
-                + Eq
-                + PartialEq
-                + 'static,
+            Y: From<U> + Into<U>,
+            U: From<Y> + Into<Y> + Synapse,
     {
         match msg {
             Impulse::Init(effector) => {
@@ -167,19 +141,13 @@ impl<S, Y> Impulse<S, Y> where
 /// handle. it will route these messages asynchronously to their destination,
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
-pub struct Effector<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse
-{
+pub struct Effector<S: Signal, Y: Synapse> {
     this_soma:      Handle,
     sender:         mpsc::Sender<Impulse<S, Y>>,
     reactor:        reactor::Handle,
 }
 
-impl<S, Y> Clone for Effector<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse
-{
+impl<S: Signal, Y: Synapse> Clone for Effector<S, Y> {
     fn clone(&self) -> Self {
         Self {
             this_soma: self.this_soma,
@@ -189,10 +157,7 @@ impl<S, Y> Clone for Effector<S, Y> where
     }
 }
 
-impl<S, Y> Effector<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+impl<S: Signal, Y: Synapse> Effector<S, Y> {
     /// get the Handle associated with the soma that owns this effector
     pub fn this_soma(&self) -> Handle {
         self.this_soma
@@ -255,59 +220,32 @@ impl<S, Y> Effector<S, Y> where
 
 
 
-trait Node<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+trait Node<S: Signal, Y: Synapse> {
     fn update(&mut self, msg: Impulse<S, Y>) -> Result<()>;
 }
 
-struct SomaWrapper<L, S, Y>(Option<L>, PhantomData<S>, PhantomData<Y>);
+struct SomaWrapper<T: Soma>(Option<T>);
 
-impl<L, S, Y> SomaWrapper<L, S, Y> where
-    L: Soma<Signal=S, Synapse=Y>,
-
-    S: SomaSignal,
-    Y: SomaSynapse
-{
-    fn new(soma: L) -> Self {
-        SomaWrapper::<L, S, Y>(
-            Some(soma), PhantomData::default(), PhantomData::default()
-        )
+impl<T: Soma> SomaWrapper<T> {
+    fn new(soma: T) -> Self {
+        SomaWrapper::<T>(Some(soma))
     }
 }
 
-impl<L, IM, OM, IR, OR> Node<OM, OR> for SomaWrapper<L, IM, IR> where
-    L: Soma<Signal=IM, Synapse=IR>,
+impl<T: Soma, OS, OY> Node<OS, OY> for SomaWrapper<T> where
+    T::Signal: From<OS> + Into<OS> + Signal,
+    OS: From<T::Signal> + Into<T::Signal> + Signal,
 
-    IM: From<OM> + Into<OM> + 'static,
-    OM: From<IM> + Into<IM> + 'static,
-
-    IR: From<OR>
-        + Into<OR>
-        + Debug
-        + Copy
-        + Clone
-        + Hash
-        + Eq
-        + PartialEq
-        + 'static,
-
-    OR: From<IR>
-        + Into<IR>
-        + Debug
-        + Copy
-        + Clone
-        + Hash
-        + Eq
-        + PartialEq
-        + 'static,
+    T::Synapse: From<OY> + Into<OY> + Synapse,
+    OY: From<T::Synapse> + Into<T::Synapse> + Synapse,
 {
-    fn update(&mut self, msg: Impulse<OM, OR>) -> Result<()> {
+    fn update(&mut self, msg: Impulse<OS, OY>) -> Result<()> {
         if self.0.is_some() {
             let soma = mem::replace(&mut self.0, None)
                 .unwrap()
-                .update(Impulse::<IM, IR>::convert_protocol(msg))?
+                .update(
+                    Impulse::<T::Signal, T::Synapse>::convert_protocol(msg)
+                )?
             ;
 
             self.0 = Some(soma);

@@ -1,12 +1,10 @@
 
 use std::cell::{ RefCell };
 use std::collections::{ HashMap };
-use std::fmt::Debug;
-use std::hash::Hash;
 use std::rc::Rc;
 
 use futures::prelude::*;
-use futures::sync::{ mpsc };
+use futures::unsync::{ mpsc };
 use tokio_core::reactor;
 
 use super::{
@@ -17,16 +15,16 @@ use super::{
     Soma,
     Node,
     SomaWrapper,
-    SomaSynapse,
-    SomaSignal,
+    Synapse,
+    Signal,
 };
 
-struct OrganelleNodePool<S, Y> {
+struct OrganelleNodePool<S: Soma> {
     main_hdl:       Handle,
 
-    main:           Box<Node<S, Y>>,
+    main:           Box<Node<S::Signal, S::Synapse>>,
 
-    misc:           HashMap<Handle, Box<Node<S, Y>>>,
+    misc:           HashMap<Handle, Box<Node<S::Signal, S::Synapse>>>,
 }
 
 /// a special soma designed to contain a network of interconnected somas
@@ -45,26 +43,18 @@ struct OrganelleNodePool<S, Y> {
 ///
 /// any organelle can be plugged into any other organelle provided their messages and
 /// dendrites can convert between each other using From and Into
-pub struct Organelle<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse
-{
-    effector:       Option<Effector<S, Y>>,
+pub struct Organelle<S: Soma + 'static> where {
+    effector:       Option<Effector<S::Signal, S::Synapse>>,
 
     main_hdl:       Handle,
-    connections:    Vec<(Handle, Handle, Y)>,
+    connections:    Vec<(Handle, Handle, S::Synapse)>,
 
-    nodes:          Rc<RefCell<OrganelleNodePool<S, Y>>>,
+    nodes:          Rc<RefCell<OrganelleNodePool<S>>>,
 }
 
-impl<S, Y> Organelle<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
+impl<S: Soma + 'static> Organelle<S> {
     /// create a new organelle with input and output somas
-    pub fn new<L>(main: L) -> Self where
-        L: Soma<Signal=S, Synapse=Y> + 'static,
-    {
+    pub fn new(main: S) -> Self {
         let main_hdl = Handle::new_v4();
 
         Self {
@@ -75,7 +65,7 @@ impl<S, Y> Organelle<S, Y> where
 
             nodes: Rc::from(
                 RefCell::new(
-                    OrganelleNodePool::<S, Y> {
+                    OrganelleNodePool {
                         main_hdl: main_hdl,
 
                         main: Box::new(SomaWrapper::new(main)),
@@ -93,31 +83,14 @@ impl<S, Y> Organelle<S, Y> where
     /// as long as the soma's message type can convert Into and From the
     /// organelle's message type, it can be added to the organelle and can
     /// communicate with any somas that do the same.
-    pub fn add_soma<L>(&mut self, soma: L) -> Handle where
-        L: Soma + 'static,
+    pub fn add_soma<T>(&mut self, soma: T) -> Handle where
+        T: Soma + 'static,
 
-        S: From<L::Signal> + Into<L::Signal> + 'static,
-        L::Signal: From<S> + Into<S> + 'static,
+        S::Signal: From<T::Signal> + Into<T::Signal> + Signal,
+        T::Signal: From<S::Signal> + Into<S::Signal> + Signal,
 
-        Y: From<L::Synapse>
-            + Into<L::Synapse>
-            + Debug
-            + Copy
-            + Clone
-            + Hash
-            + Eq
-            + PartialEq
-            + 'static,
-
-        L::Synapse: From<Y>
-            + Into<Y>
-            + Debug
-            + Copy
-            + Clone
-            + Hash
-            + Eq
-            + PartialEq
-            + 'static,
+        S::Synapse: From<T::Synapse> + Into<T::Synapse> + Synapse,
+        T::Synapse: From<S::Synapse> + Into<S::Synapse> + Synapse,
     {
         let node = Box::new(SomaWrapper::new(soma));
         let handle = Handle::new_v4();
@@ -128,7 +101,9 @@ impl<S, Y> Organelle<S, Y> where
     }
 
     /// connect input to output and update them accordingly
-    pub fn connect(&mut self, input: Handle, output: Handle, role: Y) {
+    pub fn connect(
+        &mut self, input: Handle, output: Handle, role: S::Synapse
+    ) {
         self.connections.push((input, output, role));
     }
 
@@ -137,7 +112,9 @@ impl<S, Y> Organelle<S, Y> where
         self.main_hdl
     }
 
-    fn update_node(&self, hdl: Handle, msg: Impulse<S, Y>) -> Result<()> {
+    fn update_node(&self, hdl: Handle, msg: Impulse<S::Signal, S::Synapse>)
+        -> Result<()>
+    {
         let mut nodes = (*self.nodes).borrow_mut();
 
         if hdl == nodes.main_hdl {
@@ -149,11 +126,11 @@ impl<S, Y> Organelle<S, Y> where
     }
 
     fn init<T, U>(mut self, effector: Effector<T, U>) -> Result<Self> where
-        S: From<T> + Into<T> + SomaSignal,
-        T: From<S> + Into<S> + SomaSignal,
+        S::Signal: From<T> + Into<T> + Signal,
+        T: From<S::Signal> + Into<S::Signal> + Signal,
 
-        Y: From<U> + Into<U> + SomaSynapse,
-        U: From<Y> + Into<Y> + SomaSynapse,
+        S::Synapse: From<U> + Into<U> + Synapse,
+        U: From<S::Synapse> + Into<S::Synapse> + Synapse,
     {
         let organelle_hdl = effector.this_soma;
 
@@ -245,7 +222,7 @@ impl<S, Y> Organelle<S, Y> where
         Ok(self)
     }
 
-    fn add_input(self, input: Handle, role: Y) -> Result<Self> {
+    fn add_input(self, input: Handle, role: S::Synapse) -> Result<Self> {
         (*self.nodes).borrow_mut().main.update
             (Impulse::AddInput(input, role)
         )?;
@@ -253,7 +230,7 @@ impl<S, Y> Organelle<S, Y> where
         Ok(self)
     }
 
-    fn add_output(self, output: Handle, role: Y) -> Result<Self> {
+    fn add_output(self, output: Handle, role: S::Synapse) -> Result<Self> {
         (*self.nodes).borrow_mut().main.update(
             Impulse::AddOutput(output, role)
         )?;
@@ -263,17 +240,17 @@ impl<S, Y> Organelle<S, Y> where
 
     fn forward<T, U>(
         organelle: Handle,
-        nodes: &mut OrganelleNodePool<S, Y>,
+        nodes: &mut OrganelleNodePool<S>,
         sender: mpsc::Sender<Impulse<T, U>>,
         reactor: &reactor::Handle,
-        msg: Impulse<S, Y>
+        msg: Impulse<S::Signal, S::Synapse>,
     )
         -> Result<()> where
-            S: From<T> + Into<T> + SomaSignal,
-            T: From<S> + Into<S> + SomaSignal,
+            S::Signal: From<T> + Into<T> + Signal,
+            T: From<S::Signal> + Into<S::Signal> + Signal,
 
-            Y: From<U> + Into<U> + SomaSynapse,
-            U: From<Y> + Into<Y> + SomaSynapse,
+            S::Synapse: From<U> + Into<U> + Synapse,
+            U: From<S::Synapse> + Into<S::Synapse> + Synapse,
     {
         match msg {
             Impulse::Payload(src, dest, msg) => {
@@ -335,14 +312,11 @@ impl<S, Y> Organelle<S, Y> where
     }
 }
 
-impl<S, Y> Soma for Organelle<S, Y> where
-    S: SomaSignal,
-    Y: SomaSynapse,
-{
-    type Signal = S;
-    type Synapse = Y;
+impl<S: Soma> Soma for Organelle<S> {
+    type Signal = S::Signal;
+    type Synapse = S::Synapse;
 
-    fn update(self, msg: Impulse<S, Y>) -> Result<Self> {
+    fn update(self, msg: Impulse<S::Signal, S::Synapse>) -> Result<Self> {
         match msg {
             Impulse::Init(effector) => self.init(effector),
             Impulse::AddInput(input, role) => self.add_input(
