@@ -1,4 +1,3 @@
-
 #[macro_use]
 extern crate error_chain;
 
@@ -16,9 +15,7 @@ impl From<CounterSignal> for IncrementerSignal {
     fn from(msg: CounterSignal) -> IncrementerSignal {
         match msg {
             CounterSignal::Ack => IncrementerSignal::Ack,
-            msg @ _ => panic!(
-                "counter does not support {:#?}", msg
-            ),
+            msg @ _ => panic!("counter does not support {:#?}", msg),
         }
     }
 }
@@ -43,11 +40,9 @@ struct IncrementerSoma;
 impl IncrementerSoma {
     fn sheath() -> Result<Sheath<Self>> {
         Sheath::new(
-            Self { },
-            vec![ ],
-            vec![
-                Dendrite::RequireOne(IncrementerSynapse::Incrementer)
-            ],
+            Self {},
+            vec![],
+            vec![Dendrite::RequireOne(IncrementerSynapse::Incrementer)],
         )
     }
 }
@@ -60,14 +55,12 @@ impl Neuron for IncrementerSoma {
         self,
         axon: &Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    )
-        -> Result<Self>
-    {
+    ) -> Result<Self> {
         match msg {
             Impulse::Start => {
                 axon.send_req_output(
                     IncrementerSynapse::Incrementer,
-                    IncrementerSignal::Increment
+                    IncrementerSignal::Increment,
                 )?;
 
                 Ok(self)
@@ -76,7 +69,7 @@ impl Neuron for IncrementerSoma {
             Impulse::Signal(_, IncrementerSignal::Ack) => {
                 axon.send_req_output(
                     IncrementerSynapse::Incrementer,
-                    IncrementerSignal::Increment
+                    IncrementerSignal::Increment,
                 )?;
 
                 Ok(self)
@@ -97,9 +90,7 @@ impl From<IncrementerSignal> for CounterSignal {
     fn from(msg: IncrementerSignal) -> CounterSignal {
         match msg {
             IncrementerSignal::Increment => CounterSignal::BumpCounter,
-            msg @ _ => panic!(
-                "counter does not support {:#?}", msg
-            ),
+            msg @ _ => panic!("counter does not support {:#?}", msg),
         }
     }
 }
@@ -120,15 +111,15 @@ impl From<IncrementerSynapse> for CounterSynapse {
 }
 
 struct CounterSoma {
-    counter: u32
+    counter: u32,
 }
 
 impl CounterSoma {
     fn sheath() -> Result<Sheath<Self>> {
         Sheath::new(
             Self { counter: 0 },
-            vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
-            vec![ ],
+            vec![Dendrite::RequireOne(CounterSynapse::Incrementer)],
+            vec![],
         )
     }
 }
@@ -141,9 +132,7 @@ impl Neuron for CounterSoma {
         mut self,
         axon: &Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    )
-        -> Result<Self>
-    {
+    ) -> Result<Self> {
         match msg {
             Impulse::Start => Ok(self),
 
@@ -153,10 +142,10 @@ impl Neuron for CounterSoma {
 
                     self.counter += 1;
                     axon.send_req_input(
-                        CounterSynapse::Incrementer, CounterSignal::Ack
+                        CounterSynapse::Incrementer,
+                        CounterSignal::Ack,
                     )?;
-                }
-                else {
+                } else {
                     println!("stop");
                     axon.effector()?.stop();
                 }
@@ -174,9 +163,9 @@ struct ForwarderSoma;
 impl ForwarderSoma {
     fn sheath() -> Result<Sheath<Self>> {
         Sheath::new(
-            Self { },
-            vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
-            vec![ Dendrite::RequireOne(CounterSynapse::Incrementer) ],
+            Self {},
+            vec![Dendrite::RequireOne(CounterSynapse::Incrementer)],
+            vec![Dendrite::RequireOne(CounterSynapse::Incrementer)],
         )
     }
 }
@@ -189,9 +178,7 @@ impl Neuron for ForwarderSoma {
         self,
         axon: &Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    )
-        -> Result<Self>
-    {
+    ) -> Result<Self> {
         match msg {
             Impulse::Start => Ok(self),
 
@@ -203,28 +190,21 @@ impl Neuron for ForwarderSoma {
                         axon.effector()?.this_soma()
                     );
 
-                    axon.send_req_output(
-                        CounterSynapse::Incrementer, msg
-                    )?;
-                }
-                else if
-                    src == axon.req_output(CounterSynapse::Incrementer)?
-                {
+                    axon.send_req_output(CounterSynapse::Incrementer, msg)?;
+                } else if src == axon.req_output(CounterSynapse::Incrementer)? {
                     println!(
                         "forwarding output {:#?} through {}",
                         msg,
                         axon.effector()?.this_soma()
                     );
 
-                    axon.send_req_input(
-                        CounterSynapse::Incrementer, msg
-                    )?;
+                    axon.send_req_input(CounterSynapse::Incrementer, msg)?;
                 }
 
                 Ok(self)
             },
 
-            _ => bail!("unexpected message")
+            _ => bail!("unexpected message"),
         }
     }
 }
@@ -244,9 +224,8 @@ fn test_organelle() {
 
 #[test]
 fn test_sub_organelle() {
-    let mut counter_organelle = Organelle::new(
-        ForwarderSoma::sheath().unwrap()
-    );
+    let mut counter_organelle =
+        Organelle::new(ForwarderSoma::sheath().unwrap());
 
     let forwarder = counter_organelle.get_main_handle();
     let counter = counter_organelle.add_soma(CounterSoma::sheath().unwrap());
@@ -259,19 +238,19 @@ fn test_sub_organelle() {
     let counter = inc_organelle.add_soma(counter_organelle);
     // connect the incrementer to the counter organelle
     inc_organelle.connect(
-        incrementer, counter, IncrementerSynapse::Incrementer
+        incrementer,
+        counter,
+        IncrementerSynapse::Incrementer,
     );
 
     inc_organelle.run().unwrap();
 }
 
-struct InitErrorSoma {
-
-}
+struct InitErrorSoma {}
 
 impl InitErrorSoma {
     fn new() -> Self {
-        Self { }
+        Self {}
     }
 }
 
@@ -292,13 +271,11 @@ impl Soma for InitErrorSoma {
     }
 }
 
-struct UpdateErrorSoma {
-
-}
+struct UpdateErrorSoma {}
 
 impl UpdateErrorSoma {
     fn new() -> Self {
-        Self { }
+        Self {}
     }
 }
 
@@ -321,7 +298,7 @@ fn test_soma_error() {
         panic!("soma update was supposed to fail");
     }
 
-    if let Ok(_) = Organelle::new(UpdateErrorSoma { }).run() {
+    if let Ok(_) = Organelle::new(UpdateErrorSoma {}).run() {
         panic!("organelle updates were supposed to fail");
     }
 }

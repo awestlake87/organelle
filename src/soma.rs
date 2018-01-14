@@ -1,26 +1,38 @@
-
 use std::fmt::Debug;
 use std::hash::Hash;
 
 use futures::prelude::*;
-use futures::unsync::{ mpsc };
+use futures::unsync::mpsc;
 use tokio_core::reactor;
 
 use super::{
-    Result, Error, ErrorKind, Impulse, Handle, Effector, SomaWrapper, Node
+    Effector,
+    Error,
+    ErrorKind,
+    Handle,
+    Impulse,
+    Node,
+    Result,
+    SomaWrapper,
 };
 
 /// defines the collection of traits necessary to act as a soma message
-pub trait Signal: 'static { }
+pub trait Signal: 'static {}
 
-impl<T> Signal for T where T: 'static { }
+impl<T> Signal for T
+where
+    T: 'static,
+{
+}
 
 /// defines the collection of traits necessary to act as a soma role
-pub trait Synapse: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static { }
+pub trait Synapse: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static {}
 
-impl<T> Synapse for T where
-    T: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static
-{ }
+impl<T> Synapse for T
+where
+    T: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
+{
+}
 
 /// defines an interface for a soma of any type
 ///
@@ -33,9 +45,10 @@ pub trait Soma: Sized {
     type Synapse: Synapse;
 
     /// apply any changes to the soma's state as a result of _msg
-    fn update(self, _msg: Impulse<Self::Signal, Self::Synapse>)
-        -> Result<Self>
-    {
+    fn update(
+        self,
+        _msg: Impulse<Self::Signal, Self::Synapse>,
+    ) -> Result<Self> {
         Ok(self)
     }
 
@@ -53,44 +66,36 @@ pub trait Soma: Sized {
         let mut node = SomaWrapper::new(self);
 
         reactor.clone().spawn(
-            queue_tx.clone()
-                .send(
-                    Impulse::Init(
-                        Effector {
-                            this_soma: main_soma,
-                            sender: sender,
-                            reactor: reactor,
-                        }
-                    )
-                )
-                .and_then(
-                    |tx| tx.send(Impulse::Start)
-                        .then(|_| Ok(()))
-                )
-                .then(|_| Ok(()))
-
+            queue_tx
+                .clone()
+                .send(Impulse::Init(Effector {
+                    this_soma: main_soma,
+                    sender: sender,
+                    reactor: reactor,
+                }))
+                .and_then(|tx| tx.send(Impulse::Start).then(|_| Ok(())))
+                .then(|_| Ok(())),
         );
 
         let (tx, rx) = mpsc::channel::<Error>(1);
         let reactor = core.handle();
 
-        let stream_future = queue_rx.take_while(
-            |msg| match *msg {
+        let stream_future = queue_rx
+            .take_while(|msg| match *msg {
                 Impulse::Stop => Ok(false),
-                _ => Ok(true)
-            }
-        ).for_each(
-            move |msg| {
+                _ => Ok(true),
+            })
+            .for_each(move |msg| {
                 if let Err(e) = match msg {
-                    Impulse::Init(effector) => node.update(
-                        Impulse::Init(effector)
-                    ),
-                    Impulse::AddInput(input, role) => node.update(
-                        Impulse::AddInput(input, role)
-                    ),
-                    Impulse::AddOutput(output, role) => node.update(
-                        Impulse::AddOutput(output, role)
-                    ),
+                    Impulse::Init(effector) => {
+                        node.update(Impulse::Init(effector))
+                    },
+                    Impulse::AddInput(input, role) => {
+                        node.update(Impulse::AddInput(input, role))
+                    },
+                    Impulse::AddOutput(output, role) => {
+                        node.update(Impulse::AddOutput(output, role))
+                    },
 
                     Impulse::Start => node.update(Impulse::Start),
 
@@ -105,14 +110,11 @@ pub trait Soma: Sized {
 
                     _ => unreachable!(),
                 } {
-                    reactor.spawn(
-                        tx.clone().send(e).then(|_| Ok(()))
-                    );
+                    reactor.spawn(tx.clone().send(e).then(|_| Ok(())));
                 }
 
                 Ok(())
-            }
-        );
+            });
 
         let result = core.run(
             stream_future
@@ -120,12 +122,12 @@ pub trait Soma: Sized {
                 .select(
                     rx.into_future()
                         .map(|(item, _)| Err(item.unwrap()))
-                        .map_err(|_| ())
+                        .map_err(|_| ()),
                 )
                 .map(|(result, _)| result)
                 .map_err(|_| -> Error {
                     ErrorKind::Msg("select error".into()).into()
-                })
+                }),
         )?;
 
         result

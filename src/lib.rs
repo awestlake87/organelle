@@ -14,9 +14,9 @@ mod organelle;
 mod soma;
 mod axon;
 
-pub use organelle::{ Organelle };
-pub use soma::{ Soma, Signal, Synapse };
-pub use axon::{ Axon, Dendrite, Neuron, Sheath };
+pub use axon::{Axon, Dendrite, Neuron, Sheath};
+pub use organelle::Organelle;
+pub use soma::{Signal, Soma, Synapse};
 
 use std::mem;
 
@@ -50,8 +50,8 @@ pub type Handle = Uuid;
 /// 1. a soma is always updated with Init first.
 /// 2. as the organelle is built, the soma will be updated with any inputs or
 ///     outputs specified using AddInput and AddOutput.
-/// 3. when the organelle is ready to begin execution, every soma is updated with
-///     Start
+/// 3. when the organelle is ready to begin execution, every soma is updated
+/// with     Start
 /// 4. any messages sent between somas will come through Signal
 /// 5. when a soma determines that the organelle should stop, it can issue Stop
 ///     and the organelle will exit its event loop.
@@ -69,7 +69,8 @@ pub enum Impulse<S: Signal, Y: Synapse> {
     /// internal use only - used to track source and destination of message
     Payload(Handle, Handle, S),
 
-    /// updates the soma with a user-defined message from source soma Handle
+    /// updates the soma with a user-defined message from source soma
+    /// Handle
     Signal(Handle, S),
 
     /// tells the organelle to stop executing
@@ -81,12 +82,12 @@ pub enum Impulse<S: Signal, Y: Synapse> {
 
 impl<S: Signal, Y: Synapse> Impulse<S, Y> {
     fn convert_protocol<T, U>(msg: Impulse<T, U>) -> Self
-        where
-            S: From<T> + Into<T>,
-            T: From<S> + Into<S> + Signal,
+    where
+        S: From<T> + Into<T>,
+        T: From<S> + Into<S> + Signal,
 
-            Y: From<U> + Into<U>,
-            U: From<Y> + Into<Y> + Synapse,
+        Y: From<U> + Into<U>,
+        U: From<Y> + Into<Y> + Synapse,
     {
         match msg {
             Impulse::Init(effector) => {
@@ -94,39 +95,33 @@ impl<S: Signal, Y: Synapse> Impulse<S, Y> {
 
                 let (tx, rx) = mpsc::channel(10);
 
-                effector.reactor.spawn(
-                    rx.for_each(move |msg| {
-                        sender.clone().send(
-                            Impulse::<T, U>::convert_protocol(msg)
-                        )
-                            .then(|_| Ok(()))
-                    })
-                );
+                effector.reactor.spawn(rx.for_each(move |msg| {
+                    sender
+                        .clone()
+                        .send(Impulse::<T, U>::convert_protocol(msg))
+                        .then(|_| Ok(()))
+                }));
 
-                Impulse::Init(
-                    Effector {
-                        this_soma: effector.this_soma,
-                        sender: tx,
-                        reactor: effector.reactor,
-                    }
-                )
+                Impulse::Init(Effector {
+                    this_soma: effector.this_soma,
+                    sender: tx,
+                    reactor: effector.reactor,
+                })
             },
 
-            Impulse::AddInput(input, role) => Impulse::AddInput(
-                input, role.into()
-            ),
-            Impulse::AddOutput(output, role) => Impulse::AddOutput(
-                output, role.into()
-            ),
+            Impulse::AddInput(input, role) => {
+                Impulse::AddInput(input, role.into())
+            },
+            Impulse::AddOutput(output, role) => {
+                Impulse::AddOutput(output, role.into())
+            },
 
             Impulse::Start => Impulse::Start,
 
-            Impulse::Payload(src, dest, msg) => Impulse::Payload(
-                src, dest, msg.into()
-            ),
-            Impulse::Signal(src, msg) => Impulse::Signal(
-                src, msg.into()
-            ),
+            Impulse::Payload(src, dest, msg) => {
+                Impulse::Payload(src, dest, msg.into())
+            },
+            Impulse::Signal(src, msg) => Impulse::Signal(src, msg.into()),
 
             Impulse::Stop => Impulse::Stop,
 
@@ -142,9 +137,9 @@ impl<S: Signal, Y: Synapse> Impulse<S, Y> {
 /// so communication can be tricky, however, this is truly the best way I've
 /// found to compose efficient, scalable systems.
 pub struct Effector<S: Signal, Y: Synapse> {
-    this_soma:      Handle,
-    sender:         mpsc::Sender<Impulse<S, Y>>,
-    reactor:        reactor::Handle,
+    this_soma: Handle,
+    sender: mpsc::Sender<Impulse<S, Y>>,
+    reactor: reactor::Handle,
 }
 
 impl<S: Signal, Y: Synapse> Clone for Effector<S, Y> {
@@ -165,9 +160,11 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
 
     /// send a message to dest soma
     pub fn send(&self, dest: Handle, msg: S) {
-        self.send_organelle_message(
-            Impulse::Payload(self.this_soma(), dest, msg)
-        );
+        self.send_organelle_message(Impulse::Payload(
+            self.this_soma(),
+            dest,
+            msg,
+        ));
     }
 
     /// send a batch of messages in order to dest soma
@@ -175,14 +172,13 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
         let src = self.this_soma();
 
         self.spawn(
-            self.sender.clone()
-                .send_all(
-                    iter_ok(
-                        msgs.into_iter()
-                            .map(move |m| Impulse::Payload(src, dest, m))
-                    )
-                )
-                .then(|_| Ok(()))
+            self.sender
+                .clone()
+                .send_all(iter_ok(
+                    msgs.into_iter()
+                        .map(move |m| Impulse::Payload(src, dest, m)),
+                ))
+                .then(|_| Ok(())),
         );
     }
 
@@ -197,8 +193,9 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
     }
 
     /// spawn a future on the reactor
-    pub fn spawn<F>(&self, future: F) where
-        F: Future<Item=(), Error=()> + 'static
+    pub fn spawn<F>(&self, future: F)
+    where
+        F: Future<Item = (), Error = ()> + 'static,
     {
         self.reactor.spawn(future);
     }
@@ -218,8 +215,6 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
     }
 }
 
-
-
 trait Node<S: Signal, Y: Synapse> {
     fn update(&mut self, msg: Impulse<S, Y>) -> Result<()>;
 }
@@ -232,7 +227,8 @@ impl<T: Soma> SomaWrapper<T> {
     }
 }
 
-impl<T: Soma, OS, OY> Node<OS, OY> for SomaWrapper<T> where
+impl<T: Soma, OS, OY> Node<OS, OY> for SomaWrapper<T>
+where
     T::Signal: From<OS> + Into<OS> + Signal,
     OS: From<T::Signal> + Into<T::Signal> + Signal,
 
@@ -241,12 +237,9 @@ impl<T: Soma, OS, OY> Node<OS, OY> for SomaWrapper<T> where
 {
     fn update(&mut self, msg: Impulse<OS, OY>) -> Result<()> {
         if self.0.is_some() {
-            let soma = mem::replace(&mut self.0, None)
-                .unwrap()
-                .update(
-                    Impulse::<T::Signal, T::Synapse>::convert_protocol(msg)
-                )?
-            ;
+            let soma = mem::replace(&mut self.0, None).unwrap().update(
+                Impulse::<T::Signal, T::Synapse>::convert_protocol(msg),
+            )?;
 
             self.0 = Some(soma);
         }

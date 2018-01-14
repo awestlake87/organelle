@@ -1,9 +1,6 @@
-
 use std::collections::HashMap;
 
-use super::{
-    Result, Impulse, Effector, Handle, Soma, Signal, Synapse
-};
+use super::{Effector, Handle, Impulse, Result, Signal, Soma, Synapse};
 
 /// defines dendrites on how connections can be made
 #[derive(Debug, Copy, Clone)]
@@ -25,25 +22,24 @@ type DendriteMap<Y> = HashMap<Y, (DendriteHandle, Dendrite<Y>)>;
 
 /// provides core convenience functions with little boilerplate
 pub struct Axon<S: Signal, Y: Synapse> {
-    effector:               Option<Effector<S, Y>>,
+    effector: Option<Effector<S, Y>>,
 
-    inputs:                 DendriteMap<Y>,
-    outputs:                DendriteMap<Y>,
+    inputs: DendriteMap<Y>,
+    outputs: DendriteMap<Y>,
 }
 
 impl<S: Signal, Y: Synapse> Axon<S, Y> {
     /// new axon with dendrites and default user-defined state
-    pub fn new(inputs: Vec<Dendrite<Y>>, outputs: Vec<Dendrite<Y>>)
-        -> Result<Self>
-    {
-        Ok(
-            Self {
-                effector: None,
+    pub fn new(
+        inputs: Vec<Dendrite<Y>>,
+        outputs: Vec<Dendrite<Y>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            effector: None,
 
-                inputs: Self::create_roles(inputs)?,
-                outputs: Self::create_roles(outputs)?,
-            }
-        )
+            inputs: Self::create_roles(inputs)?,
+            outputs: Self::create_roles(outputs)?,
+        })
     }
 
     fn init(&mut self, effector: Effector<S, Y>) -> Result<()> {
@@ -51,8 +47,7 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
             self.effector = Some(effector);
 
             Ok(())
-        }
-        else {
+        } else {
             bail!("init called twice")
         }
     }
@@ -80,9 +75,10 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
     ///
     /// if axon handles the given message, it consumes it, otherwise it is
     /// returned so that the soma can use it.
-    pub fn update(&mut self, msg: Impulse<S, Y>)
-        -> Result<Option<Impulse<S, Y>>>
-    {
+    pub fn update(
+        &mut self,
+        msg: Impulse<S, Y>,
+    ) -> Result<Option<Impulse<S, Y>>> {
         match msg {
             Impulse::Init(effector) => {
                 self.init(effector)?;
@@ -102,7 +98,7 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
                 Ok(Some(Impulse::Start))
             },
 
-            msg @ _ => Ok(Some(msg))
+            msg @ _ => Ok(Some(msg)),
         }
     }
 
@@ -110,14 +106,11 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
     pub fn effector(&self) -> Result<&Effector<S, Y>> {
         if self.effector.is_some() {
             Ok(self.effector.as_ref().unwrap())
-        }
-        else {
-            bail!(
-                concat!(
-                    "effector has not been set ",
-                    "(hint: state needs to be updated first)"
-                )
-            )
+        } else {
+            bail!(concat!(
+                "effector has not been set ",
+                "(hint: state needs to be updated first)"
+            ))
         }
     }
     /// convenience function for sending messages by role
@@ -158,24 +151,19 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
         Self::get_var(&self.outputs, role)
     }
 
-    fn create_roles(dendrites: Vec<Dendrite<Y>>)
-        -> Result<DendriteMap<Y>>
-    {
+    fn create_roles(dendrites: Vec<Dendrite<Y>>) -> Result<DendriteMap<Y>> {
         let mut map = HashMap::new();
 
         for c in dendrites {
             let result = match c {
                 Dendrite::RequireOne(role) => map.insert(
                     role,
-                    (DendriteHandle::Empty, Dendrite::RequireOne(role))
+                    (DendriteHandle::Empty, Dendrite::RequireOne(role)),
                 ),
                 Dendrite::Variadic(role) => map.insert(
                     role,
-                    (
-                        DendriteHandle::Many(vec![ ]),
-                        Dendrite::Variadic(role)
-                    )
-                )
+                    (DendriteHandle::Many(vec![]), Dendrite::Variadic(role)),
+                ),
             };
 
             if result.is_some() {
@@ -186,18 +174,12 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
         Ok(map)
     }
 
-    fn add_role(map: &mut DendriteMap<Y>, soma: Handle, role: Y)
-        -> Result<()>
-    {
-        if let Some(&mut (ref mut handle, ref dendrite))
-            = map.get_mut(&role)
-        {
+    fn add_role(map: &mut DendriteMap<Y>, soma: Handle, role: Y) -> Result<()> {
+        if let Some(&mut (ref mut handle, ref dendrite)) = map.get_mut(&role) {
             match *dendrite {
                 Dendrite::RequireOne(role) => {
                     let new_hdl = match handle {
-                        &mut DendriteHandle::Empty => {
-                            DendriteHandle::One(soma)
-                        },
+                        &mut DendriteHandle::Empty => DendriteHandle::One(soma),
 
                         _ => bail!(
                             "only one soma can be assigned to role {:?}",
@@ -212,13 +194,12 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
                         somas.push(soma);
                     },
 
-                    _ => unreachable!("role {:?} was configured wrong", role)
-                }
+                    _ => unreachable!("role {:?} was configured wrong", role),
+                },
             };
 
             Ok(())
-        }
-        else {
+        } else {
             bail!("unexpected role {:?}", role)
         }
     }
@@ -232,7 +213,7 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
                         "role {:?} does not meet dendrite {:?}",
                         role,
                         *dendrite
-                    )
+                    ),
                 },
                 Dendrite::Variadic(_) => (),
             }
@@ -242,14 +223,12 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
     }
 
     fn get_req(map: &DendriteMap<Y>, role: Y) -> Result<Handle> {
-        if let Some(&(ref handle, Dendrite::RequireOne(_))) = map.get(&role)
-        {
+        if let Some(&(ref handle, Dendrite::RequireOne(_))) = map.get(&role) {
             match handle {
                 &DendriteHandle::One(ref soma) => Ok(*soma),
-                _ => bail!("role {:?} does not meet dendrite", role)
+                _ => bail!("role {:?} does not meet dendrite", role),
             }
-        }
-        else {
+        } else {
             bail!("unexpected role {:?}", role)
         }
     }
@@ -258,54 +237,59 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
         if let Some(&(ref handle, Dendrite::Variadic(_))) = map.get(&role) {
             match handle {
                 &DendriteHandle::Many(ref somas) => Ok(somas),
-                _ => unreachable!("role {:?} was configured wrong")
+                _ => unreachable!("role {:?} was configured wrong"),
             }
-        }
-        else {
+        } else {
             bail!("unexpected role {:?}", role)
         }
     }
 }
 
 /// soma used to wrap a Axon and a soma specialized with Neuron
-pub struct Sheath<N> where
-    N: Neuron + Sized + 'static
+pub struct Sheath<N>
+where
+    N: Neuron + Sized + 'static,
 {
-    axon:       Axon<N::Signal, N::Synapse>,
-    nucleus:    N,
+    axon: Axon<N::Signal, N::Synapse>,
+    nucleus: N,
 }
 
-impl<N> Sheath<N> where N: Neuron + Sized + 'static {
+impl<N> Sheath<N>
+where
+    N: Neuron + Sized + 'static,
+{
     /// wrap a nucleus and constrain the axon
     pub fn new(
         nucleus: N,
         inputs: Vec<Dendrite<N::Synapse>>,
         outputs: Vec<Dendrite<N::Synapse>>,
-    )
-        -> Result<Self>
-    {
-        Ok(
-            Self {
-                axon: Axon::new(inputs, outputs)?,
-                nucleus: nucleus
-            }
-        )
+    ) -> Result<Self> {
+        Ok(Self {
+            axon: Axon::new(inputs, outputs)?,
+            nucleus: nucleus,
+        })
     }
 }
 
-impl<N> Soma for Sheath<N> where N: Neuron {
+impl<N> Soma for Sheath<N>
+where
+    N: Neuron,
+{
     type Signal = N::Signal;
     type Synapse = N::Synapse;
 
-    fn update(mut self, msg: Impulse<Self::Signal, Self::Synapse>)
-        -> Result<Self>
-    {
+    fn update(
+        mut self,
+        msg: Impulse<Self::Signal, Self::Synapse>,
+    ) -> Result<Self> {
         if let Some(msg) = self.axon.update(msg)? {
             let nucleus = self.nucleus.update(&self.axon, msg)?;
 
-            Ok(Sheath { axon: self.axon, nucleus: nucleus })
-        }
-        else {
+            Ok(Sheath {
+                axon: self.axon,
+                nucleus: nucleus,
+            })
+        } else {
             Ok(self)
         }
     }
@@ -322,8 +306,6 @@ pub trait Neuron: Sized {
     fn update(
         self,
         axon: &Axon<Self::Signal, Self::Synapse>,
-        msg: Impulse<Self::Signal, Self::Synapse>
-    )
-        -> Result<Self>
-    ;
+        msg: Impulse<Self::Signal, Self::Synapse>,
+    ) -> Result<Self>;
 }

@@ -1,4 +1,3 @@
-
 #[macro_use]
 extern crate error_chain;
 
@@ -20,9 +19,9 @@ struct GiveSomethingSoma;
 impl GiveSomethingSoma {
     fn sheath() -> Result<Sheath<Self>> {
         Sheath::new(
-            Self { },
-            vec![ ],
-            vec![ Dendrite::RequireOne(TestSynapse::Something) ],
+            Self {},
+            vec![],
+            vec![Dendrite::RequireOne(TestSynapse::Something)],
         )
     }
 }
@@ -35,13 +34,12 @@ impl Neuron for GiveSomethingSoma {
         self,
         axon: &Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    )
-        -> Result<Self>
-    {
+    ) -> Result<Self> {
         match msg {
             Impulse::Start => {
                 axon.send_req_output(
-                    TestSynapse::Something, TestSignal::Something
+                    TestSynapse::Something,
+                    TestSignal::Something,
                 )?;
 
                 Ok(self)
@@ -56,9 +54,9 @@ struct TakeSomethingSoma;
 impl TakeSomethingSoma {
     fn sheath() -> Result<Sheath<Self>> {
         Sheath::new(
-            Self { },
-            vec![ Dendrite::RequireOne(TestSynapse::Something) ],
-            vec![ ],
+            Self {},
+            vec![Dendrite::RequireOne(TestSynapse::Something)],
+            vec![],
         )
     }
 }
@@ -71,9 +69,7 @@ impl Neuron for TakeSomethingSoma {
         self,
         axon: &Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    )
-        -> Result<Self>
-    {
+    ) -> Result<Self> {
         match msg {
             Impulse::Start => Ok(self),
 
@@ -99,8 +95,7 @@ fn test_invalid_input() {
 
     if let Err(e) = organelle.run() {
         eprintln!("error {:#?}", e)
-    }
-    else {
+    } else {
         panic!("GiveSomethingSoma should not accept this input")
     }
 }
@@ -109,9 +104,8 @@ fn test_invalid_input() {
 fn test_require_one() {
     // make sure require one works as intended
     {
-        let mut organelle = Organelle::new(
-            GiveSomethingSoma::sheath().unwrap()
-        );
+        let mut organelle =
+            Organelle::new(GiveSomethingSoma::sheath().unwrap());
 
         let give = organelle.get_main_handle();
         let take = organelle.add_soma(TakeSomethingSoma::sheath().unwrap());
@@ -125,15 +119,13 @@ fn test_require_one() {
     {
         if let Err(e) = TakeSomethingSoma::sheath().unwrap().run() {
             eprintln!("error {:#?}", e)
-        }
-        else {
+        } else {
             panic!("TakeSomethingSoma has no input, so it should fail")
         }
 
         if let Err(e) = GiveSomethingSoma::sheath().unwrap().run() {
             eprintln!("error {:#?}", e)
-        }
-        else {
+        } else {
             panic!("GiveSomethingSoma has no output, so it should fail")
         }
     }

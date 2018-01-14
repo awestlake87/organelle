@@ -1,0 +1,9 @@
+max_width = 80
+wrap_comments = true
+
+imports_indent = "Block"
+imports_layout = "HorizontalVertical"
+reorder_imports = true
+reorder_imports_in_group = true
+
+match_block_trailing_comma = true
