@@ -1,6 +1,7 @@
+use std;
 use std::collections::HashMap;
 
-use super::{Effector, Handle, Impulse, Result, Signal, Soma, Synapse};
+use super::{Effector, Handle, Impulse, Result, Signal, Soma, Synapse, Error};
 
 /// defines dendrites on how connections can be made
 #[derive(Debug, Copy, Clone)]
@@ -277,11 +278,12 @@ where
 {
     type Signal = N::Signal;
     type Synapse = N::Synapse;
+    type Error = N::Error;
 
     fn update(
         mut self,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         if let Some(msg) = self.axon.update(msg)? {
             let nucleus = self.nucleus.update(&self.axon, msg)?;
 
@@ -301,6 +303,8 @@ pub trait Neuron: Sized {
     type Signal: Signal;
     /// the role a connection between somas takes
     type Synapse: Synapse;
+    /// error that occurs when an update fails
+    type Error: std::error::Error + Send + From<Error> + 'static;
 
     /// update the nucleus with the Axon and soma message
     fn update(

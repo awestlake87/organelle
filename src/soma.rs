@@ -1,3 +1,4 @@
+use std;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -43,12 +44,14 @@ pub trait Soma: Sized {
     type Signal: Signal;
     /// user-defined roles for connections
     type Synapse: Synapse;
+    /// error when a soma fails to update
+    type Error: std::error::Error + Send + From<Error> + 'static;
 
     /// apply any changes to the soma's state as a result of _msg
     fn update(
         self,
         _msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Self::Error> {
         Ok(self)
     }
 

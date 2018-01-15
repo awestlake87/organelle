@@ -237,11 +237,12 @@ where
 {
     fn update(&mut self, msg: Impulse<OS, OY>) -> Result<()> {
         if self.0.is_some() {
-            let soma = mem::replace(&mut self.0, None).unwrap().update(
+            match mem::replace(&mut self.0, None).unwrap().update(
                 Impulse::<T::Signal, T::Synapse>::convert_protocol(msg),
-            )?;
-
-            self.0 = Some(soma);
+            ) {
+                Ok(soma) => self.0 = Some(soma),
+                Err(e) => return Err(Error::with_chain(e, ErrorKind::SomaError))
+            }
         }
 
         Ok(())

@@ -50,6 +50,7 @@ impl IncrementerSoma {
 impl Neuron for IncrementerSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
+    type Error = Error;
 
     fn update(
         self,
@@ -127,6 +128,7 @@ impl CounterSoma {
 impl Neuron for CounterSoma {
     type Signal = CounterSignal;
     type Synapse = CounterSynapse;
+    type Error = Error;
 
     fn update(
         mut self,
@@ -173,6 +175,7 @@ impl ForwarderSoma {
 impl Neuron for ForwarderSoma {
     type Signal = CounterSignal;
     type Synapse = CounterSynapse;
+    type Error = Error;
 
     fn update(
         self,
@@ -257,6 +260,7 @@ impl InitErrorSoma {
 impl Soma for InitErrorSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
+    type Error = Error;
 
     fn update(self, msg: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         match msg {
@@ -282,6 +286,7 @@ impl UpdateErrorSoma {
 impl Soma for UpdateErrorSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
+    type Error = Error;
 
     fn update(self, _: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         bail!("update failed")

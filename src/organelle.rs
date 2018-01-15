@@ -1,3 +1,4 @@
+use std;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -289,21 +290,24 @@ impl<S: Soma + 'static> Organelle<S> {
 impl<S: Soma> Soma for Organelle<S> {
     type Signal = S::Signal;
     type Synapse = S::Synapse;
+    type Error = S::Error;
 
-    fn update(self, msg: Impulse<S::Signal, S::Synapse>) -> Result<Self> {
-        match msg {
-            Impulse::Init(effector) => self.init(effector),
-            Impulse::AddInput(input, role) => self.add_input(input, role),
-            Impulse::AddOutput(output, role) => self.add_output(output, role),
+    fn update(
+        self, msg: Impulse<S::Signal, S::Synapse>
+    ) -> std::result::Result<Self, Self::Error> {
+        Ok(match msg {
+            Impulse::Init(effector) => self.init(effector)?,
+            Impulse::AddInput(input, role) => self.add_input(input, role)?,
+            Impulse::AddOutput(output, role) => self.add_output(output, role)?,
 
-            Impulse::Start => self.start(),
+            Impulse::Start => self.start()?,
             Impulse::Signal(src, msg) => {
                 self.update_node(self.main_hdl, Impulse::Signal(src, msg))?;
 
-                Ok(self)
+                self
             },
 
             _ => unreachable!(),
-        }
+        })
     }
 }

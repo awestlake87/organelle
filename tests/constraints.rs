@@ -29,6 +29,7 @@ impl GiveSomethingSoma {
 impl Neuron for GiveSomethingSoma {
     type Signal = TestSignal;
     type Synapse = TestSynapse;
+    type Error = Error;
 
     fn update(
         self,
@@ -64,6 +65,7 @@ impl TakeSomethingSoma {
 impl Neuron for TakeSomethingSoma {
     type Signal = TestSignal;
     type Synapse = TestSynapse;
+    type Error = Error;
 
     fn update(
         self,
