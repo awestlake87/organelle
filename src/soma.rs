@@ -52,18 +52,20 @@ pub trait Soma: Sized {
         Ok(self)
     }
 
-    /// spin up an event loop and run soma
-    fn run(self) -> Result<()> {
+    /// convert the soma into a future that can be run on an event loop
+    fn into_future(
+        self, reactor: reactor::Handle
+    ) -> Box<Future<Item=Result<()>, Error=Error>> where Self: 'static {
         let (queue_tx, queue_rx) = mpsc::channel(100);
-        let mut core = reactor::Core::new()?;
 
         let main_soma = Handle::new_v4();
-        let reactor = core.handle();
 
         let sender = queue_tx.clone();
 
         // Rc to keep it alive, RefCell to mutate it in the event loop
         let mut node = SomaWrapper::new(self);
+
+        let reactor_copy = reactor.clone();
 
         reactor.clone().spawn(
             queue_tx
@@ -73,12 +75,19 @@ pub trait Soma: Sized {
                     sender: sender,
                     reactor: reactor,
                 }))
-                .and_then(|tx| tx.send(Impulse::Start).then(|_| Ok(())))
-                .then(|_| Ok(())),
+                .and_then(|tx| tx.send(Impulse::Start)
+                    .then(|result| match result {
+                        Ok(_) => Ok(()),
+                        Err(e) => panic!("unable to start main soma: {:?}", e),
+                    })
+                )
+                .then(|result| match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => panic!("unable to initialize main soma: {:?}", e),
+                })
         );
 
         let (tx, rx) = mpsc::channel::<Error>(1);
-        let reactor = core.handle();
 
         let stream_future = queue_rx
             .take_while(|msg| match *msg {
@@ -110,26 +119,45 @@ pub trait Soma: Sized {
 
                     _ => unreachable!(),
                 } {
-                    reactor.spawn(tx.clone().send(e).then(|_| Ok(())));
+                    reactor_copy.spawn(tx.clone()
+                        .send(e)
+                        .then(|result| match result {
+                            Ok(_) => Ok(()),
+                            Err(e) => panic!("unable to send error: {:?}", e),
+                        })
+                    );
                 }
 
                 Ok(())
+            })
+            .then(move |_| {
+                // make sure the channel stays open
+                let _keep_alive = queue_tx;
+                
+                Ok(())
             });
 
-        let result = core.run(
-            stream_future
-                .map(|_| Ok(()))
-                .select(
-                    rx.into_future()
-                        .map(|(item, _)| Err(item.unwrap()))
-                        .map_err(|_| ()),
-                )
-                .map(|(result, _)| result)
-                .map_err(|_| -> Error {
-                    ErrorKind::Msg("select error".into()).into()
-                }),
-        )?;
 
-        result
+        Box::new(stream_future
+            .map(|_| Ok(()))
+            .select(
+                rx.into_future()
+                    .map(|(item, _)| Err(item.unwrap()))
+                    .map_err(|_| ())
+            )
+            .map(|(result, _)| result)
+            .map_err(|_| -> Error {
+                ErrorKind::Msg("select error".into()).into()
+            })
+        )
+    }
+
+    /// spin up an event loop and run soma
+    fn run(self) -> Result<()> where Self: 'static {
+        let mut core = reactor::Core::new()?;
+
+        let reactor = core.handle();
+
+        core.run(self.into_future(reactor))?
     }
 }
