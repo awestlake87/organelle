@@ -22,6 +22,7 @@ use std::mem;
 
 use futures::prelude::*;
 use futures::stream::iter_ok;
+use futures::sync;
 use futures::unsync::mpsc;
 use tokio_core::reactor;
 use uuid::Uuid;
@@ -205,12 +206,113 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
         self.reactor.clone()
     }
 
-    /// get a reactor remote
-    pub fn remote(&self) -> reactor::Remote {
-        self.reactor.remote().clone()
+    /// get a remote effector for use across threads
+    pub fn remote(&self) -> RemoteEffector<S> where S: Send {
+        let (tx, rx) = sync::mpsc::channel(10);
+
+        let sender = self.sender.clone();
+
+        self.spawn(rx
+            .map(|imp| match imp {
+                RemoteImpulse::Payload(src, dest, signal) => {
+                    Impulse::Payload(src, dest, signal)
+                },
+                RemoteImpulse::Stop => Impulse::Stop,
+                RemoteImpulse::Err(e) => Impulse::Err(e),
+            })
+            .for_each(move |imp| sender.clone().send(imp).then(|_| Ok(())))
+            .then(|_| Ok(()))
+        );
+
+        RemoteEffector {
+            this_soma: self.this_soma,
+            sender: tx,
+            reactor: self.reactor().remote().clone(),
+        }
     }
 
     fn send_organelle_message(&self, msg: Impulse<S, Y>) {
+        self.spawn(self.sender.clone().send(msg).then(|_| Ok(())));
+    }
+}
+
+enum RemoteImpulse<S: Signal + Send> {
+    Payload(Handle, Handle, S),
+    Stop,
+    Err(Error),
+}
+
+/// the remote effector is an effector meant to be used between threads
+pub struct RemoteEffector<S: Signal + Send> {
+    this_soma: Handle,
+    sender: sync::mpsc::Sender<RemoteImpulse<S>>,
+    reactor: reactor::Remote,
+}
+
+impl<S: Signal + Send> Clone for RemoteEffector<S> {
+    fn clone(&self) -> Self {
+        Self {
+            this_soma: self.this_soma,
+            sender: self.sender.clone(),
+            reactor: self.reactor.clone(),
+        }
+    }
+}
+
+impl<S: Signal + Send> RemoteEffector<S> {
+    /// get the Handle associated with the soma that owns this effector
+    pub fn this_soma(&self) -> Handle {
+        self.this_soma
+    }
+
+    /// send a message to dest soma
+    pub fn send(&self, dest: Handle, msg: S) {
+        self.send_organelle_message(RemoteImpulse::Payload(
+            self.this_soma(),
+            dest,
+            msg,
+        ));
+    }
+
+    /// send a batch of messages in order to dest soma
+    pub fn send_in_order(&self, dest: Handle, msgs: Vec<S>) {
+        let src = self.this_soma();
+
+        self.spawn(
+            self.sender
+                .clone()
+                .send_all(iter_ok(
+                    msgs.into_iter()
+                        .map(move |m| RemoteImpulse::Payload(src, dest, m)),
+                ))
+                .then(|_| Ok(())),
+        );
+    }
+
+    /// stop the organelle
+    pub fn stop(&self) {
+        self.send_organelle_message(RemoteImpulse::Stop);
+    }
+
+    /// stop the organelle because of an error
+    pub fn error(&self, e: Error) {
+        self.send_organelle_message(RemoteImpulse::Err(e));
+    }
+
+    /// spawn a future on the reactor
+    pub fn spawn<F>(&self, future: F)
+    where
+        F: Future<Item = (), Error = ()> + Send + 'static,
+    {
+        self.reactor.spawn(move |_| future);
+    }
+
+    /// get a reactor handle
+    pub fn reactor(&self) -> reactor::Remote {
+        self.reactor.clone()
+    }
+
+    fn send_organelle_message(&self, msg: RemoteImpulse<S>) {
         self.spawn(self.sender.clone().send(msg).then(|_| Ok(())));
     }
 }

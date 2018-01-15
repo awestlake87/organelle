@@ -3,6 +3,9 @@ extern crate error_chain;
 
 extern crate organelle;
 
+use std::mem;
+use std::thread;
+
 use organelle::*;
 
 #[derive(Debug)]
@@ -139,10 +142,11 @@ impl Neuron for CounterSoma {
             Impulse::Start => Ok(self),
 
             Impulse::Signal(_, CounterSignal::BumpCounter) => {
-                if self.counter < 5 {
-                    println!("counter increment");
+                println!("counter increment");
 
-                    self.counter += 1;
+                self.counter += 1;
+
+                if self.counter < 5 {
                     axon.send_req_input(
                         CounterSynapse::Incrementer,
                         CounterSignal::Ack,
@@ -249,7 +253,92 @@ fn test_sub_organelle() {
     inc_organelle.run().unwrap();
 }
 
-struct InitErrorSoma {}
+struct RemoteIncrementerSoma {
+    incrementer_thread:     Option<thread::JoinHandle<()>>,
+}
+
+impl RemoteIncrementerSoma {
+    fn sheath() -> Result<Sheath<Self>> {
+        Ok(Sheath::new(
+            Self { incrementer_thread: None },
+            vec![],
+            vec![Dendrite::RequireOne(IncrementerSynapse::Incrementer)],
+        )?)
+    }
+}
+
+impl Neuron for RemoteIncrementerSoma {
+    type Signal = IncrementerSignal;
+    type Synapse = IncrementerSynapse;
+    type Error = Error;
+
+    fn update(
+        mut self,
+        axon: &Axon<Self::Signal, Self::Synapse>,
+        imp: Impulse<Self::Signal, Self::Synapse>,
+    ) -> Result<Self> {
+        match imp {
+            Impulse::Start => {
+                let effector = axon.effector()?.remote();
+                let counter = axon.req_output(IncrementerSynapse::Incrementer)?;
+
+                self.incrementer_thread = Some(thread::spawn(move || {
+                    effector.send_in_order(
+                        counter,
+                        vec![
+                            IncrementerSignal::Increment,
+                            IncrementerSignal::Increment,
+                            IncrementerSignal::Increment,
+                            IncrementerSignal::Increment,
+                            IncrementerSignal::Increment,
+                        ]
+                    );
+                }))
+            },
+            Impulse::Signal(_, IncrementerSignal::Ack) => (),
+
+            _ => bail!("unexpected impulse"),
+        }
+
+        Ok(self)
+    }
+}
+
+impl Drop for RemoteIncrementerSoma {
+    fn drop(&mut self) {
+        if let Some(hdl) = mem::replace(&mut self.incrementer_thread, None) {
+            hdl.join().unwrap();
+        }
+    }
+}
+
+#[test]
+fn test_remote() {
+    let mut counter_organelle =
+        Organelle::new(ForwarderSoma::sheath().unwrap());
+
+    let forwarder = counter_organelle.get_main_handle();
+    let counter = counter_organelle.add_soma(CounterSoma::sheath().unwrap());
+
+    counter_organelle.connect(forwarder, counter, CounterSynapse::Incrementer);
+
+    let mut inc_organelle = Organelle::new(
+        RemoteIncrementerSoma::sheath().unwrap()
+    );
+
+    let incrementer = inc_organelle.get_main_handle();
+    let counter = inc_organelle.add_soma(counter_organelle);
+    // connect the incrementer to the counter organelle
+    inc_organelle.connect(
+        incrementer,
+        counter,
+        IncrementerSynapse::Incrementer,
+    );
+
+    inc_organelle.run().unwrap();
+}
+
+struct InitErrorSoma;
 
 impl InitErrorSoma {
     fn new() -> Self {
@@ -275,7 +364,7 @@ impl Soma for InitErrorSoma {
     }
 }
 
-struct UpdateErrorSoma {}
+struct UpdateErrorSoma;
 
 impl UpdateErrorSoma {
     fn new() -> Self {
