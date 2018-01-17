@@ -1,7 +1,7 @@
 use std;
 use std::collections::HashMap;
 
-use super::{Effector, Handle, Impulse, Result, Signal, Soma, Synapse, Error};
+use super::{Effector, Error, Handle, Impulse, Result, Signal, Soma, Synapse};
 
 /// defines dendrites on how connections can be made
 #[derive(Debug, Copy, Clone)]
@@ -311,5 +311,5 @@ pub trait Neuron: Sized {
         self,
         axon: &Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self>;
+    ) -> std::result::Result<Self, Self::Error>;
 }
