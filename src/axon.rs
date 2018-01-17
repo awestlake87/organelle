@@ -1,5 +1,6 @@
 use std;
 use std::collections::HashMap;
+use std::intrinsics;
 
 use super::{Effector, Error, Handle, Impulse, Result, Signal, Soma, Synapse};
 
@@ -81,7 +82,7 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
         msg: Impulse<S, Y>,
     ) -> Result<Option<Impulse<S, Y>>> {
         match msg {
-            Impulse::Init(effector) => {
+            Impulse::Init(_, effector) => {
                 self.init(effector)?;
                 Ok(None)
             },
@@ -305,6 +306,10 @@ pub trait Neuron: Sized {
     type Synapse: Synapse;
     /// error that occurs when an update fails
     type Error: std::error::Error + Send + From<Error> + 'static;
+
+    fn type_name() -> &'static str {
+        unsafe { intrinsics::type_name::<Self>() }
+    }
 
     /// update the nucleus with the Axon and soma message
     fn update(

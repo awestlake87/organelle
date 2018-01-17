@@ -1,4 +1,5 @@
 #![warn(missing_docs)]
+#![feature(core_intrinsics)]
 
 //! Organelle - reactive architecture for emergent AI systems
 
@@ -13,9 +14,11 @@ extern crate uuid;
 mod organelle;
 mod soma;
 mod axon;
+mod probe;
 
 pub use axon::{Axon, Dendrite, Neuron, Sheath};
 pub use organelle::Organelle;
+pub use probe::{ProbeData, ProbeSignal, ProbeSoma, ProbeSynapse};
 pub use soma::{Signal, Soma, Synapse};
 
 use std::mem;
@@ -57,8 +60,8 @@ pub type Handle = Uuid;
 /// 5. when a soma determines that the organelle should stop, it can issue Stop
 ///     and the organelle will exit its event loop.
 pub enum Impulse<S: Signal, Y: Synapse> {
-    /// initializes a soma with an effector to use
-    Init(Effector<S, Y>),
+    /// initializes a soma with the parent handle and an effector to use
+    Init(Option<Handle>, Effector<S, Y>),
     /// add an input Handle with connection role
     AddInput(Handle, Y),
     /// add an output Handle with connection role
@@ -77,6 +80,9 @@ pub enum Impulse<S: Signal, Y: Synapse> {
     /// tells the organelle to stop executing
     Stop,
 
+    /// collect information about the organelle system
+    Probe(Handle),
+
     /// stop the organelle because of an error
     Err(Error),
 }
@@ -91,7 +97,7 @@ impl<S: Signal, Y: Synapse> Impulse<S, Y> {
         U: From<Y> + Into<Y> + Synapse,
     {
         match msg {
-            Impulse::Init(effector) => {
+            Impulse::Init(parent, effector) => {
                 let sender = effector.sender;
 
                 let (tx, rx) = mpsc::channel(10);
@@ -103,11 +109,14 @@ impl<S: Signal, Y: Synapse> Impulse<S, Y> {
                         .then(|_| Ok(()))
                 }));
 
-                Impulse::Init(Effector {
-                    this_soma: effector.this_soma,
-                    sender: tx,
-                    reactor: effector.reactor,
-                })
+                Impulse::Init(
+                    parent,
+                    Effector {
+                        this_soma: effector.this_soma,
+                        sender: tx,
+                        reactor: effector.reactor,
+                    },
+                )
             },
 
             Impulse::AddInput(input, role) => {
@@ -125,6 +134,7 @@ impl<S: Signal, Y: Synapse> Impulse<S, Y> {
             Impulse::Signal(src, msg) => Impulse::Signal(src, msg.into()),
 
             Impulse::Stop => Impulse::Stop,
+            Impulse::Probe(dest) => Impulse::Probe(dest),
 
             Impulse::Err(e) => Impulse::Err(e),
         }
@@ -193,6 +203,11 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
         self.send_organelle_message(Impulse::Err(e));
     }
 
+    /// probe for information about the organelle
+    pub fn probe(&self, dest: Handle) {
+        self.send_organelle_message(Impulse::Probe(dest));
+    }
+
     /// spawn a future on the reactor
     pub fn spawn<F>(&self, future: F)
     where
@@ -207,21 +222,23 @@ impl<S: Signal, Y: Synapse> Effector<S, Y> {
     }
 
     /// get a remote effector for use across threads
-    pub fn remote(&self) -> RemoteEffector<S> where S: Send {
+    pub fn remote(&self) -> RemoteEffector<S>
+    where
+        S: Send,
+    {
         let (tx, rx) = sync::mpsc::channel(10);
 
         let sender = self.sender.clone();
 
-        self.spawn(rx
-            .map(|imp| match imp {
+        self.spawn(
+            rx.map(|imp| match imp {
                 RemoteImpulse::Payload(src, dest, signal) => {
                     Impulse::Payload(src, dest, signal)
                 },
                 RemoteImpulse::Stop => Impulse::Stop,
                 RemoteImpulse::Err(e) => Impulse::Err(e),
-            })
-            .for_each(move |imp| sender.clone().send(imp).then(|_| Ok(())))
-            .then(|_| Ok(()))
+            }).for_each(move |imp| sender.clone().send(imp).then(|_| Ok(())))
+                .then(|_| Ok(())),
         );
 
         RemoteEffector {
@@ -318,6 +335,7 @@ impl<S: Signal + Send> RemoteEffector<S> {
 }
 
 trait Node<S: Signal, Y: Synapse> {
+    fn type_name(&self) -> &'static str;
     fn update(&mut self, msg: Impulse<S, Y>) -> Result<()>;
 }
 
@@ -337,13 +355,19 @@ where
     T::Synapse: From<OY> + Into<OY> + Synapse,
     OY: From<T::Synapse> + Into<T::Synapse> + Synapse,
 {
+    fn type_name(&self) -> &'static str {
+        T::type_name()
+    }
     fn update(&mut self, msg: Impulse<OS, OY>) -> Result<()> {
         if self.0.is_some() {
-            match mem::replace(&mut self.0, None).unwrap().update(
-                Impulse::<T::Signal, T::Synapse>::convert_protocol(msg),
-            ) {
+            match mem::replace(&mut self.0, None)
+                .unwrap()
+                .update(Impulse::<T::Signal, T::Synapse>::convert_protocol(msg))
+            {
                 Ok(soma) => self.0 = Some(soma),
-                Err(e) => return Err(Error::with_chain(e, ErrorKind::SomaError))
+                Err(e) => {
+                    return Err(Error::with_chain(e, ErrorKind::SomaError))
+                },
             }
         }
 

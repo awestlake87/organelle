@@ -254,13 +254,15 @@ fn test_sub_organelle() {
 }
 
 struct RemoteIncrementerSoma {
-    incrementer_thread:     Option<thread::JoinHandle<()>>,
+    incrementer_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl RemoteIncrementerSoma {
     fn sheath() -> Result<Sheath<Self>> {
         Ok(Sheath::new(
-            Self { incrementer_thread: None },
+            Self {
+                incrementer_thread: None,
+            },
             vec![],
             vec![Dendrite::RequireOne(IncrementerSynapse::Incrementer)],
         )?)
@@ -291,7 +293,7 @@ impl Neuron for RemoteIncrementerSoma {
                             IncrementerSignal::Increment,
                             IncrementerSignal::Increment,
                             IncrementerSignal::Increment,
-                        ]
+                        ],
                     );
                 }))
             },
@@ -322,9 +324,8 @@ fn test_remote() {
 
     counter_organelle.connect(forwarder, counter, CounterSynapse::Incrementer);
 
-    let mut inc_organelle = Organelle::new(
-        RemoteIncrementerSoma::sheath().unwrap()
-    );
+    let mut inc_organelle =
+        Organelle::new(RemoteIncrementerSoma::sheath().unwrap());
 
     let incrementer = inc_organelle.get_main_handle();
     let counter = inc_organelle.add_soma(counter_organelle);
@@ -353,7 +354,7 @@ impl Soma for InitErrorSoma {
 
     fn update(self, msg: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         match msg {
-            Impulse::Init(effector) => {
+            Impulse::Init(_, effector) => {
                 effector.error("a soma error!".into());
 
                 Ok(self)

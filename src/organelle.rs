@@ -44,6 +44,7 @@ struct OrganelleNodePool<S: Soma> {
 /// any organelle can be plugged into any other organelle provided their
 /// messages and dendrites can convert between each other using From and Into
 pub struct Organelle<S: Soma + 'static> {
+    parent: Option<Handle>,
     effector: Option<Effector<S::Signal, S::Synapse>>,
 
     main_hdl: Handle,
@@ -58,6 +59,7 @@ impl<S: Soma + 'static> Organelle<S> {
         let main_hdl = Handle::new_v4();
 
         Self {
+            parent: None,
             effector: None,
 
             main_hdl: main_hdl,
@@ -120,7 +122,11 @@ impl<S: Soma + 'static> Organelle<S> {
         }
     }
 
-    fn init<T, U>(mut self, effector: Effector<T, U>) -> Result<Self>
+    fn init<T, U>(
+        mut self,
+        parent: Option<Handle>,
+        effector: Effector<T, U>,
+    ) -> Result<Self>
     where
         S::Signal: From<T> + Into<T> + Signal,
         T: From<S::Signal> + Into<S::Signal> + Signal,
@@ -128,8 +134,9 @@ impl<S: Soma + 'static> Organelle<S> {
         S::Synapse: From<U> + Into<U> + Synapse,
         U: From<S::Synapse> + Into<S::Synapse> + Synapse,
     {
-        let organelle_hdl = effector.this_soma;
+        self.parent = parent;
 
+        let organelle_hdl = effector.this_soma;
         let (queue_tx, queue_rx) = mpsc::channel(100);
 
         self.effector = Some(Effector {
@@ -145,19 +152,25 @@ impl<S: Soma + 'static> Organelle<S> {
 
         self.update_node(
             main_hdl,
-            Impulse::Init(Effector {
-                this_soma: main_hdl,
-                sender: sender.clone(),
-                reactor: reactor.clone(),
-            }),
+            Impulse::Init(
+                Some(organelle_hdl),
+                Effector {
+                    this_soma: main_hdl,
+                    sender: sender.clone(),
+                    reactor: reactor.clone(),
+                },
+            ),
         )?;
 
         for (hdl, node) in (*self.nodes).borrow_mut().misc.iter_mut() {
-            node.update(Impulse::Init(Effector {
-                this_soma: *hdl,
-                sender: sender.clone(),
-                reactor: reactor.clone(),
-            }))?;
+            node.update(Impulse::Init(
+                Some(organelle_hdl),
+                Effector {
+                    this_soma: *hdl,
+                    sender: sender.clone(),
+                    reactor: reactor.clone(),
+                },
+            ))?;
         }
 
         for &(input, output, role) in &self.connections {
@@ -273,6 +286,16 @@ impl<S: Soma + 'static> Organelle<S> {
                 }
             },
 
+            Impulse::Probe(dest) => println!(
+                "{}{:#?}",
+                Self::type_name(),
+                nodes
+                    .misc
+                    .iter()
+                    .map(|(hdl, node)| (*hdl, node.type_name()))
+                    .collect::<Vec<(Handle, &str)>>()
+            ),
+
             Impulse::Stop => {
                 reactor.spawn(sender.send(Impulse::Stop).then(|_| Ok(())))
             },
@@ -293,10 +316,11 @@ impl<S: Soma> Soma for Organelle<S> {
     type Error = S::Error;
 
     fn update(
-        self, msg: Impulse<S::Signal, S::Synapse>
+        self,
+        msg: Impulse<S::Signal, S::Synapse>,
     ) -> std::result::Result<Self, Self::Error> {
         Ok(match msg {
-            Impulse::Init(effector) => self.init(effector)?,
+            Impulse::Init(parent, effector) => self.init(parent, effector)?,
             Impulse::AddInput(input, role) => self.add_input(input, role)?,
             Impulse::AddOutput(output, role) => self.add_output(output, role)?,
 

@@ -1,6 +1,7 @@
 use std;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::intrinsics;
 
 use futures::prelude::*;
 use futures::unsync::mpsc;
@@ -47,6 +48,10 @@ pub trait Soma: Sized {
     /// error when a soma fails to update
     type Error: std::error::Error + Send + From<Error> + 'static;
 
+    fn type_name() -> &'static str {
+        unsafe { intrinsics::type_name::<Self>() }
+    }
+
     /// apply any changes to the soma's state as a result of _msg
     fn update(
         self,
@@ -57,8 +62,12 @@ pub trait Soma: Sized {
 
     /// convert the soma into a future that can be run on an event loop
     fn into_future(
-        self, reactor: reactor::Handle
-    ) -> Box<Future<Item=Result<()>, Error=Error>> where Self: 'static {
+        self,
+        reactor: reactor::Handle,
+    ) -> Box<Future<Item = Result<()>, Error = Error>>
+    where
+        Self: 'static,
+    {
         let (queue_tx, queue_rx) = mpsc::channel(100);
 
         let main_soma = Handle::new_v4();
@@ -73,21 +82,24 @@ pub trait Soma: Sized {
         reactor.clone().spawn(
             queue_tx
                 .clone()
-                .send(Impulse::Init(Effector {
-                    this_soma: main_soma,
-                    sender: sender,
-                    reactor: reactor,
-                }))
-                .and_then(|tx| tx.send(Impulse::Start)
-                    .then(|result| match result {
+                .send(Impulse::Init(
+                    None,
+                    Effector {
+                        this_soma: main_soma,
+                        sender: sender,
+                        reactor: reactor,
+                    },
+                ))
+                .and_then(|tx| {
+                    tx.send(Impulse::Start).then(|result| match result {
                         Ok(_) => Ok(()),
                         Err(e) => panic!("unable to start main soma: {:?}", e),
                     })
-                )
+                })
                 .then(|result| match result {
                     Ok(_) => Ok(()),
                     Err(e) => panic!("unable to initialize main soma: {:?}", e),
-                })
+                }),
         );
 
         let (tx, rx) = mpsc::channel::<Error>(1);
@@ -99,8 +111,8 @@ pub trait Soma: Sized {
             })
             .for_each(move |msg| {
                 if let Err(e) = match msg {
-                    Impulse::Init(effector) => {
-                        node.update(Impulse::Init(effector))
+                    Impulse::Init(parent, effector) => {
+                        node.update(Impulse::Init(parent, effector))
                     },
                     Impulse::AddInput(input, role) => {
                         node.update(Impulse::AddInput(input, role))
@@ -112,23 +124,27 @@ pub trait Soma: Sized {
                     Impulse::Start => node.update(Impulse::Start),
 
                     Impulse::Payload(src, dest, msg) => {
-                        // messages should only be sent to our main soma
+                        // messages should only be sent to our soma
                         assert_eq!(dest, main_soma);
 
                         node.update(Impulse::Signal(src, msg))
+                    },
+                    Impulse::Probe(dest) => {
+                        // probes should only be send to our soma
+                        assert_eq!(dest, main_soma);
+                        node.update(Impulse::Probe(dest))
                     },
 
                     Impulse::Err(e) => Err(e),
 
                     _ => unreachable!(),
                 } {
-                    reactor_copy.spawn(tx.clone()
-                        .send(e)
-                        .then(|result| match result {
+                    reactor_copy.spawn(tx.clone().send(e).then(|result| {
+                        match result {
                             Ok(_) => Ok(()),
                             Err(e) => panic!("unable to send error: {:?}", e),
-                        })
-                    );
+                        }
+                    }));
                 }
 
                 Ok(())
@@ -136,27 +152,30 @@ pub trait Soma: Sized {
             .then(move |_| {
                 // make sure the channel stays open
                 let _keep_alive = queue_tx;
-                
+
                 Ok(())
             });
 
-
-        Box::new(stream_future
-            .map(|_| Ok(()))
-            .select(
-                rx.into_future()
-                    .map(|(item, _)| Err(item.unwrap()))
-                    .map_err(|_| ())
-            )
-            .map(|(result, _)| result)
-            .map_err(|_| -> Error {
-                ErrorKind::Msg("select error".into()).into()
-            })
+        Box::new(
+            stream_future
+                .map(|_| Ok(()))
+                .select(
+                    rx.into_future()
+                        .map(|(item, _)| Err(item.unwrap()))
+                        .map_err(|_| ()),
+                )
+                .map(|(result, _)| result)
+                .map_err(|_| -> Error {
+                    ErrorKind::Msg("select error".into()).into()
+                }),
         )
     }
 
     /// spin up an event loop and run soma
-    fn run(self) -> Result<()> where Self: 'static {
+    fn run(self) -> Result<()>
+    where
+        Self: 'static,
+    {
         let mut core = reactor::Core::new()?;
 
         let reactor = core.handle();
