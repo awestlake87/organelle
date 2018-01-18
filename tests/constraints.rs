@@ -102,7 +102,7 @@ fn test_invalid_input() {
 
     organelle.connect(give1, give2, TestSynapse::Something);
 
-    if let Err(e) = core.run(organelle.into_future()).unwrap() {
+    if let Err(e) = core.run(organelle.into_future()) {
         eprintln!("error {:#?}", e)
     } else {
         panic!("GiveSomethingSoma should not accept this input")
@@ -123,7 +123,7 @@ fn test_require_one() {
 
         organelle.connect(give, take, TestSynapse::Something);
 
-        core.run(organelle.into_future()).unwrap().unwrap();
+        core.run(organelle.into_future()).unwrap();
     }
 
     // make sure require one fails as intended
@@ -137,8 +137,7 @@ fn test_require_one() {
                 handle.clone(),
                 TakeSomethingSoma::sheath().unwrap(),
             ).into_future(),
-        ).unwrap()
-        {
+        ) {
             eprintln!("error {:#?}", e)
         } else {
             panic!("TakeSomethingSoma has no input, so it should fail")
@@ -149,8 +148,7 @@ fn test_require_one() {
                 handle.clone(),
                 GiveSomethingSoma::sheath().unwrap(),
             ).into_future(),
-        ).unwrap()
-        {
+        ) {
             eprintln!("error {:#?}", e)
         } else {
             panic!("GiveSomethingSoma has no output, so it should fail")

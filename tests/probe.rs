@@ -84,5 +84,5 @@ fn probe() {
 
     organelle.connect(controller, probe, ProbeSynapse::ProbeController);
 
-    core.run(organelle.into_future()).unwrap().unwrap();
+    core.run(organelle.into_future()).unwrap();
 }

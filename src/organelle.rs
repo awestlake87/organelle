@@ -353,7 +353,7 @@ impl<S: Soma> Soma for Organelle<S> {
 }
 
 impl<S: Soma + 'static> IntoFuture for Organelle<S> {
-    type Item = Result<()>;
+    type Item = ();
     type Error = Error;
     type Future = Box<Future<Item = Self::Item, Error = Self::Error>>;
 
@@ -469,6 +469,11 @@ impl<S: Soma + 'static> IntoFuture for Organelle<S> {
                 .map(|(result, _)| result)
                 .map_err(|_| -> Error {
                     ErrorKind::Msg("select error".into()).into()
+                })
+                .then(|result| match result {
+                    Ok(Ok(())) => future::ok(()),
+                    Ok(Err(e)) => future::err(e),
+                    Err(e) => future::err(e),
                 }),
         )
     }

@@ -232,7 +232,7 @@ fn test_organelle() {
     println!("organelle {}", main);
     organelle.connect(main, counter, IncrementerSynapse::Incrementer);
 
-    core.run(organelle.into_future()).unwrap().unwrap();
+    core.run(organelle.into_future()).unwrap();
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn test_sub_organelle() {
         IncrementerSynapse::Incrementer,
     );
 
-    core.run(inc_organelle.into_future()).unwrap().unwrap();
+    core.run(inc_organelle.into_future()).unwrap();
 }
 
 struct RemoteIncrementerSoma {
@@ -345,7 +345,7 @@ fn test_remote() {
         IncrementerSynapse::Incrementer,
     );
 
-    core.run(inc_organelle.into_future()).unwrap().unwrap();
+    core.run(inc_organelle.into_future()).unwrap();
 }
 
 struct InitErrorSoma;
@@ -400,22 +400,19 @@ fn test_soma_error() {
 
     if let Ok(_) = core.run(
         Organelle::new(handle.clone(), InitErrorSoma::new()).into_future(),
-    ).unwrap()
-    {
+    ) {
         panic!("soma init was supposed to fail");
     }
 
     if let Ok(_) = core.run(
         Organelle::new(handle.clone(), UpdateErrorSoma::new()).into_future(),
-    ).unwrap()
-    {
+    ) {
         panic!("soma update was supposed to fail");
     }
 
     if let Ok(_) = core.run(
         Organelle::new(handle.clone(), UpdateErrorSoma {}).into_future(),
-    ).unwrap()
-    {
+    ) {
         panic!("organelle updates were supposed to fail");
     }
 }
