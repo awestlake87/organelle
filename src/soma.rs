@@ -3,20 +3,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::intrinsics;
 
-use futures::prelude::*;
-use futures::unsync::mpsc;
-use tokio_core::reactor;
-
-use super::{
-    Effector,
-    Error,
-    ErrorKind,
-    Handle,
-    Impulse,
-    Node,
-    Result,
-    SomaWrapper,
-};
+use super::{Error, Impulse};
 
 /// defines the collection of traits necessary to act as a soma message
 pub trait Signal: 'static {}
@@ -48,6 +35,7 @@ pub trait Soma: Sized {
     /// error when a soma fails to update
     type Error: std::error::Error + Send + From<Error> + 'static;
 
+    /// the name of the soma
     fn type_name() -> &'static str {
         unsafe { intrinsics::type_name::<Self>() }
     }

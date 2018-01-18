@@ -307,6 +307,7 @@ pub trait Neuron: Sized {
     /// error that occurs when an update fails
     type Error: std::error::Error + Send + From<Error> + 'static;
 
+    /// get the name of the soma
     fn type_name() -> &'static str {
         unsafe { intrinsics::type_name::<Self>() }
     }

@@ -21,8 +21,6 @@ pub use organelle::Organelle;
 pub use probe::{ProbeData, ProbeSignal, ProbeSoma, ProbeSynapse};
 pub use soma::{Signal, Soma, Synapse};
 
-use std::mem;
-
 use futures::prelude::*;
 use futures::stream::iter_ok;
 use futures::sync;
@@ -331,46 +329,5 @@ impl<S: Signal + Send> RemoteEffector<S> {
 
     fn send_organelle_message(&self, msg: RemoteImpulse<S>) {
         self.spawn(self.sender.clone().send(msg).then(|_| Ok(())));
-    }
-}
-
-trait Node<S: Signal, Y: Synapse> {
-    fn type_name(&self) -> &'static str;
-    fn update(&mut self, msg: Impulse<S, Y>) -> Result<()>;
-}
-
-struct SomaWrapper<T: Soma>(Option<T>);
-
-impl<T: Soma> SomaWrapper<T> {
-    fn new(soma: T) -> Self {
-        SomaWrapper::<T>(Some(soma))
-    }
-}
-
-impl<T: Soma, OS, OY> Node<OS, OY> for SomaWrapper<T>
-where
-    T::Signal: From<OS> + Into<OS> + Signal,
-    OS: From<T::Signal> + Into<T::Signal> + Signal,
-
-    T::Synapse: From<OY> + Into<OY> + Synapse,
-    OY: From<T::Synapse> + Into<T::Synapse> + Synapse,
-{
-    fn type_name(&self) -> &'static str {
-        T::type_name()
-    }
-    fn update(&mut self, msg: Impulse<OS, OY>) -> Result<()> {
-        if self.0.is_some() {
-            match mem::replace(&mut self.0, None)
-                .unwrap()
-                .update(Impulse::<T::Signal, T::Synapse>::convert_protocol(msg))
-            {
-                Ok(soma) => self.0 = Some(soma),
-                Err(e) => {
-                    return Err(Error::with_chain(e, ErrorKind::SomaError))
-                },
-            }
-        }
-
-        Ok(())
     }
 }

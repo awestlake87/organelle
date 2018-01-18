@@ -1,8 +1,6 @@
 use std;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
-use std::rc::Rc;
 
 use futures::future;
 use futures::prelude::*;
@@ -15,21 +13,11 @@ use super::{
     ErrorKind,
     Handle,
     Impulse,
-    Node,
     Result,
     Signal,
     Soma,
-    SomaWrapper,
     Synapse,
 };
-
-struct OrganelleNodePool<S: Soma> {
-    main_hdl: Handle,
-
-    main: Box<Node<S::Signal, S::Synapse>>,
-
-    misc: HashMap<Handle, Box<Node<S::Signal, S::Synapse>>>,
-}
 
 /// a special soma designed to contain a network of interconnected somas
 ///
@@ -194,7 +182,7 @@ impl<S: Soma + 'static> Organelle<S> {
         let sender = self.effector.as_ref().unwrap().sender.clone();
         let reactor = self.effector.as_ref().unwrap().reactor.clone();
 
-        for (hdl, node) in &self.nodes {
+        for (hdl, _) in &self.nodes {
             self.update_node(
                 *hdl,
                 Impulse::Init(
@@ -322,7 +310,7 @@ impl<S: Soma + 'static> Organelle<S> {
                 }
             },
 
-            Impulse::Probe(dest) => println!("{}", Self::type_name()),
+            Impulse::Probe(_) => println!("{}", Self::type_name()),
 
             Impulse::Stop => {
                 reactor.spawn(sender.send(Impulse::Stop).then(|_| Ok(())))
