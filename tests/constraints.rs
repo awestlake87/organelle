@@ -1,9 +1,13 @@
 #[macro_use]
 extern crate error_chain;
 
+extern crate futures;
 extern crate organelle;
+extern crate tokio_core;
 
+use futures::prelude::*;
 use organelle::*;
+use tokio_core::reactor;
 
 enum TestSignal {
     Something,
@@ -88,14 +92,17 @@ impl Neuron for TakeSomethingSoma {
 
 #[test]
 fn test_invalid_input() {
-    let mut organelle = Organelle::new(GiveSomethingSoma::sheath().unwrap());
+    let mut core = reactor::Core::new().unwrap();
+
+    let mut organelle =
+        Organelle::new(core.handle(), GiveSomethingSoma::sheath().unwrap());
 
     let give1 = organelle.get_main_handle();
     let give2 = organelle.add_soma(GiveSomethingSoma::sheath().unwrap());
 
     organelle.connect(give1, give2, TestSynapse::Something);
 
-    if let Err(e) = organelle.run() {
+    if let Err(e) = core.run(organelle.into_future()).unwrap() {
         eprintln!("error {:#?}", e)
     } else {
         panic!("GiveSomethingSoma should not accept this input")
@@ -106,26 +113,44 @@ fn test_invalid_input() {
 fn test_require_one() {
     // make sure require one works as intended
     {
+        let mut core = reactor::Core::new().unwrap();
+
         let mut organelle =
-            Organelle::new(GiveSomethingSoma::sheath().unwrap());
+            Organelle::new(core.handle(), GiveSomethingSoma::sheath().unwrap());
 
         let give = organelle.get_main_handle();
         let take = organelle.add_soma(TakeSomethingSoma::sheath().unwrap());
 
         organelle.connect(give, take, TestSynapse::Something);
 
-        organelle.run().unwrap();
+        core.run(organelle.into_future()).unwrap().unwrap();
     }
 
     // make sure require one fails as intended
     {
-        if let Err(e) = TakeSomethingSoma::sheath().unwrap().run() {
+        let mut core = reactor::Core::new().unwrap();
+
+        let handle = core.handle();
+
+        if let Err(e) = core.run(
+            Organelle::new(
+                handle.clone(),
+                TakeSomethingSoma::sheath().unwrap(),
+            ).into_future(),
+        ).unwrap()
+        {
             eprintln!("error {:#?}", e)
         } else {
             panic!("TakeSomethingSoma has no input, so it should fail")
         }
 
-        if let Err(e) = GiveSomethingSoma::sheath().unwrap().run() {
+        if let Err(e) = core.run(
+            Organelle::new(
+                handle.clone(),
+                GiveSomethingSoma::sheath().unwrap(),
+            ).into_future(),
+        ).unwrap()
+        {
             eprintln!("error {:#?}", e)
         } else {
             panic!("GiveSomethingSoma has no output, so it should fail")

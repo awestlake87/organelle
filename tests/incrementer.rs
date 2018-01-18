@@ -1,12 +1,16 @@
 #[macro_use]
 extern crate error_chain;
 
+extern crate futures;
 extern crate organelle;
+extern crate tokio_core;
 
 use std::mem;
 use std::thread;
 
+use futures::prelude::*;
 use organelle::*;
+use tokio_core::reactor;
 
 #[derive(Debug)]
 enum IncrementerSignal {
@@ -218,7 +222,9 @@ impl Neuron for ForwarderSoma {
 
 #[test]
 fn test_organelle() {
-    let mut organelle = Organelle::new(IncrementerSoma::sheath().unwrap());
+    let mut core = reactor::Core::new().unwrap();
+    let mut organelle =
+        Organelle::new(core.handle(), IncrementerSoma::sheath().unwrap());
 
     let counter = organelle.add_soma(CounterSoma::sheath().unwrap());
 
@@ -226,20 +232,22 @@ fn test_organelle() {
     println!("organelle {}", main);
     organelle.connect(main, counter, IncrementerSynapse::Incrementer);
 
-    organelle.run().unwrap();
+    core.run(organelle.into_future()).unwrap().unwrap();
 }
 
 #[test]
 fn test_sub_organelle() {
+    let mut core = reactor::Core::new().unwrap();
     let mut counter_organelle =
-        Organelle::new(ForwarderSoma::sheath().unwrap());
+        Organelle::new(core.handle(), ForwarderSoma::sheath().unwrap());
 
     let forwarder = counter_organelle.get_main_handle();
     let counter = counter_organelle.add_soma(CounterSoma::sheath().unwrap());
 
     counter_organelle.connect(forwarder, counter, CounterSynapse::Incrementer);
 
-    let mut inc_organelle = Organelle::new(IncrementerSoma::sheath().unwrap());
+    let mut inc_organelle =
+        Organelle::new(core.handle(), IncrementerSoma::sheath().unwrap());
 
     let incrementer = inc_organelle.get_main_handle();
     let counter = inc_organelle.add_soma(counter_organelle);
@@ -250,7 +258,7 @@ fn test_sub_organelle() {
         IncrementerSynapse::Incrementer,
     );
 
-    inc_organelle.run().unwrap();
+    core.run(inc_organelle.into_future()).unwrap().unwrap();
 }
 
 struct RemoteIncrementerSoma {
@@ -316,8 +324,9 @@ impl Drop for RemoteIncrementerSoma {
 
 #[test]
 fn test_remote() {
+    let mut core = reactor::Core::new().unwrap();
     let mut counter_organelle =
-        Organelle::new(ForwarderSoma::sheath().unwrap());
+        Organelle::new(core.handle(), ForwarderSoma::sheath().unwrap());
 
     let forwarder = counter_organelle.get_main_handle();
     let counter = counter_organelle.add_soma(CounterSoma::sheath().unwrap());
@@ -325,7 +334,7 @@ fn test_remote() {
     counter_organelle.connect(forwarder, counter, CounterSynapse::Incrementer);
 
     let mut inc_organelle =
-        Organelle::new(RemoteIncrementerSoma::sheath().unwrap());
+        Organelle::new(core.handle(), RemoteIncrementerSoma::sheath().unwrap());
 
     let incrementer = inc_organelle.get_main_handle();
     let counter = inc_organelle.add_soma(counter_organelle);
@@ -336,7 +345,7 @@ fn test_remote() {
         IncrementerSynapse::Incrementer,
     );
 
-    inc_organelle.run().unwrap();
+    core.run(inc_organelle.into_future()).unwrap().unwrap();
 }
 
 struct InitErrorSoma;
@@ -385,15 +394,28 @@ impl Soma for UpdateErrorSoma {
 
 #[test]
 fn test_soma_error() {
-    if let Ok(_) = InitErrorSoma::new().run() {
+    let mut core = reactor::Core::new().unwrap();
+
+    let handle = core.handle();
+
+    if let Ok(_) = core.run(
+        Organelle::new(handle.clone(), InitErrorSoma::new()).into_future(),
+    ).unwrap()
+    {
         panic!("soma init was supposed to fail");
     }
 
-    if let Ok(_) = UpdateErrorSoma::new().run() {
+    if let Ok(_) = core.run(
+        Organelle::new(handle.clone(), UpdateErrorSoma::new()).into_future(),
+    ).unwrap()
+    {
         panic!("soma update was supposed to fail");
     }
 
-    if let Ok(_) = Organelle::new(UpdateErrorSoma {}).run() {
+    if let Ok(_) = core.run(
+        Organelle::new(handle.clone(), UpdateErrorSoma {}).into_future(),
+    ).unwrap()
+    {
         panic!("organelle updates were supposed to fail");
     }
 }

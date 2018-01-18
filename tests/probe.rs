@@ -1,9 +1,13 @@
 #[macro_use]
 extern crate error_chain;
 
+extern crate futures;
 extern crate organelle;
+extern crate tokio_core;
 
+use futures::prelude::*;
 use organelle::*;
+use tokio_core::reactor;
 
 struct ProbeControllerSoma;
 
@@ -66,17 +70,19 @@ impl Soma for Placeholder2 {
 
 #[test]
 fn probe() {
-    let mut organelle = Organelle::new(ProbeControllerSoma::sheath().unwrap());
+    let mut core = reactor::Core::new().unwrap();
+    let mut organelle =
+        Organelle::new(core.handle(), ProbeControllerSoma::sheath().unwrap());
 
     let controller = organelle.get_main_handle();
     let probe = organelle.add_soma(ProbeSoma::new());
 
-    let mut sub = Organelle::new(Placeholder1 {});
+    let mut sub = Organelle::new(core.handle(), Placeholder1 {});
 
     sub.add_soma(Placeholder2 {});
     organelle.add_soma(sub);
 
     organelle.connect(controller, probe, ProbeSynapse::ProbeController);
 
-    organelle.run().unwrap()
+    core.run(organelle.into_future()).unwrap().unwrap();
 }

@@ -1,14 +1,18 @@
 use std;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem;
 use std::rc::Rc;
 
+use futures::future;
 use futures::prelude::*;
 use futures::unsync::mpsc;
 use tokio_core::reactor;
 
 use super::{
     Effector,
+    Error,
+    ErrorKind,
     Handle,
     Impulse,
     Node,
@@ -44,35 +48,43 @@ struct OrganelleNodePool<S: Soma> {
 /// any organelle can be plugged into any other organelle provided their
 /// messages and dendrites can convert between each other using From and Into
 pub struct Organelle<S: Soma + 'static> {
+    reactor: reactor::Handle,
+    sender: mpsc::Sender<Impulse<S::Signal, S::Synapse>>,
+    receiver: Option<mpsc::Receiver<Impulse<S::Signal, S::Synapse>>>,
+
     parent: Option<Handle>,
     effector: Option<Effector<S::Signal, S::Synapse>>,
 
     main_hdl: Handle,
     connections: Vec<(Handle, Handle, S::Synapse)>,
 
-    nodes: Rc<RefCell<OrganelleNodePool<S>>>,
+    nodes: HashMap<Handle, mpsc::Sender<Impulse<S::Signal, S::Synapse>>>,
 }
 
 impl<S: Soma + 'static> Organelle<S> {
     /// create a new organelle with input and output somas
-    pub fn new(main: S) -> Self {
-        let main_hdl = Handle::new_v4();
+    pub fn new(reactor: reactor::Handle, main: S) -> Self {
+        let (tx, rx) = mpsc::channel(10);
 
-        Self {
+        let mut organelle = Self {
+            reactor: reactor,
+            sender: tx,
+            receiver: Some(rx),
+
             parent: None,
             effector: None,
 
-            main_hdl: main_hdl,
+            // temporary, gets overwritten below
+            main_hdl: Handle::new_v4(),
             connections: vec![],
 
-            nodes: Rc::from(RefCell::new(OrganelleNodePool {
-                main_hdl: main_hdl,
+            nodes: HashMap::new(),
+        };
 
-                main: Box::new(SomaWrapper::new(main)),
+        let main_hdl = organelle.add_soma(main);
+        organelle.main_hdl = main_hdl;
 
-                misc: HashMap::new(),
-            })),
-        }
+        organelle
     }
 
     /// add a new soma to the organelle and initialize it
@@ -90,10 +102,43 @@ impl<S: Soma + 'static> Organelle<S> {
         S::Synapse: From<T::Synapse> + Into<T::Synapse> + Synapse,
         T::Synapse: From<S::Synapse> + Into<S::Synapse> + Synapse,
     {
-        let node = Box::new(SomaWrapper::new(soma));
         let handle = Handle::new_v4();
+        let organelle_sender = self.sender.clone();
+        let reactor = self.reactor.clone();
 
-        (*self.nodes).borrow_mut().misc.insert(handle, node);
+        let (tx, rx) = mpsc::channel(10);
+
+        self.reactor.spawn(rx.fold(
+            Some(soma),
+            move |soma: Option<T>, imp: Impulse<S::Signal, S::Synapse>| {
+                if soma.is_none() {
+                    return future::ok(None);
+                }
+
+                let result = soma.unwrap().update(
+                    Impulse::<T::Signal, T::Synapse>::convert_protocol(imp),
+                );
+
+                match result {
+                    Ok(soma) => future::ok(Some(soma)),
+                    Err(e) => {
+                        reactor.spawn(
+                            organelle_sender
+                                .clone()
+                                .send(Impulse::Err(Error::with_chain(
+                                    e,
+                                    ErrorKind::SomaError,
+                                )))
+                                .then(|_| future::ok(())),
+                        );
+
+                        future::ok(None)
+                    },
+                }
+            },
+        ).then(|_| future::ok(())));
+
+        self.nodes.insert(handle, tx);
 
         handle
     }
@@ -113,12 +158,13 @@ impl<S: Soma + 'static> Organelle<S> {
         hdl: Handle,
         msg: Impulse<S::Signal, S::Synapse>,
     ) -> Result<()> {
-        let mut nodes = (*self.nodes).borrow_mut();
+        if let Some(sender) = self.nodes.get(&hdl) {
+            self.reactor
+                .spawn(sender.clone().send(msg).then(|_| future::ok(())));
 
-        if hdl == nodes.main_hdl {
-            nodes.main.update(msg)
+            Ok(())
         } else {
-            nodes.misc.get_mut(&hdl).unwrap().update(msg)
+            bail!("node not found")
         }
     }
 
@@ -148,29 +194,18 @@ impl<S: Soma + 'static> Organelle<S> {
         let sender = self.effector.as_ref().unwrap().sender.clone();
         let reactor = self.effector.as_ref().unwrap().reactor.clone();
 
-        let main_hdl = self.main_hdl;
-
-        self.update_node(
-            main_hdl,
-            Impulse::Init(
-                Some(organelle_hdl),
-                Effector {
-                    this_soma: main_hdl,
-                    sender: sender.clone(),
-                    reactor: reactor.clone(),
-                },
-            ),
-        )?;
-
-        for (hdl, node) in (*self.nodes).borrow_mut().misc.iter_mut() {
-            node.update(Impulse::Init(
-                Some(organelle_hdl),
-                Effector {
-                    this_soma: *hdl,
-                    sender: sender.clone(),
-                    reactor: reactor.clone(),
-                },
-            ))?;
+        for (hdl, node) in &self.nodes {
+            self.update_node(
+                *hdl,
+                Impulse::Init(
+                    Some(organelle_hdl),
+                    Effector {
+                        this_soma: *hdl,
+                        sender: sender.clone(),
+                        reactor: reactor.clone(),
+                    },
+                ),
+            )?;
         }
 
         for &(input, output, role) in &self.connections {
@@ -178,14 +213,16 @@ impl<S: Soma + 'static> Organelle<S> {
             self.update_node(output, Impulse::AddInput(input, role))?;
         }
 
+        let main_hdl = self.main_hdl;
         let external_sender = effector.sender;
-        let nodes = Rc::clone(&self.nodes);
+        let nodes = self.nodes.clone();
         let forward_reactor = reactor.clone();
 
         let stream_future = queue_rx.for_each(move |msg| {
             Self::forward(
                 organelle_hdl,
-                &mut (*nodes).borrow_mut(),
+                main_hdl,
+                &nodes,
                 external_sender.clone(),
                 &forward_reactor,
                 msg,
@@ -200,40 +237,29 @@ impl<S: Soma + 'static> Organelle<S> {
     }
 
     fn start(self) -> Result<Self> {
-        {
-            let mut nodes = (*self.nodes).borrow_mut();
-
-            nodes.main.update(Impulse::Start)?;
-
-            for node in nodes.misc.values_mut() {
-                node.update(Impulse::Start)?;
-            }
+        for node in self.nodes.keys() {
+            self.update_node(*node, Impulse::Start)?;
         }
 
         Ok(self)
     }
 
     fn add_input(self, input: Handle, role: S::Synapse) -> Result<Self> {
-        (*self.nodes)
-            .borrow_mut()
-            .main
-            .update(Impulse::AddInput(input, role))?;
+        self.update_node(self.main_hdl, Impulse::AddInput(input, role))?;
 
         Ok(self)
     }
 
     fn add_output(self, output: Handle, role: S::Synapse) -> Result<Self> {
-        (*self.nodes)
-            .borrow_mut()
-            .main
-            .update(Impulse::AddOutput(output, role))?;
+        self.update_node(self.main_hdl, Impulse::AddOutput(output, role))?;
 
         Ok(self)
     }
 
     fn forward<T, U>(
         organelle: Handle,
-        nodes: &mut OrganelleNodePool<S>,
+        main_hdl: Handle,
+        nodes: &HashMap<Handle, mpsc::Sender<Impulse<S::Signal, S::Synapse>>>,
         sender: mpsc::Sender<Impulse<T, U>>,
         reactor: &reactor::Handle,
         msg: Impulse<S::Signal, S::Synapse>,
@@ -249,15 +275,13 @@ impl<S: Soma + 'static> Organelle<S> {
             Impulse::Payload(src, dest, msg) => {
                 let actual_src = {
                     // check if src is the main soma
-                    if src == nodes.main_hdl {
+                    if src == main_hdl {
                         // if src is the main node, then it becomes tricky.
                         // these are allowed to send to both internal and
                         // external somas, so the question becomes whether or
                         // not to advertise itself as the soma or the organelle
 
-                        if dest == nodes.main_hdl
-                            || nodes.misc.contains_key(&dest)
-                        {
+                        if dest == organelle || nodes.contains_key(&dest) {
                             // internal node - use src
                             src
                         } else {
@@ -269,11 +293,23 @@ impl<S: Soma + 'static> Organelle<S> {
                     }
                 };
 
-                if dest == nodes.main_hdl {
-                    nodes.main.update(Impulse::Signal(actual_src, msg))?;
-                } else if let Some(ref mut node) = nodes.misc.get_mut(&dest) {
+                if dest == organelle {
+                    if let Some(main) = nodes.get(&main_hdl) {
+                        reactor.spawn(
+                            main.clone()
+                                .send(Impulse::Signal(actual_src, msg))
+                                .then(|_| future::ok(())),
+                        );
+                    } else {
+                        bail!("main soma not found")
+                    }
+                } else if let Some(soma) = nodes.get(&dest) {
                     // send to internal node
-                    node.update(Impulse::Signal(actual_src, msg))?;
+                    reactor.spawn(
+                        soma.clone()
+                            .send(Impulse::Signal(actual_src, msg))
+                            .then(|_| future::ok(())),
+                    );
                 } else {
                     // send to external node
                     reactor.spawn(
@@ -286,15 +322,7 @@ impl<S: Soma + 'static> Organelle<S> {
                 }
             },
 
-            Impulse::Probe(dest) => println!(
-                "{}{:#?}",
-                Self::type_name(),
-                nodes
-                    .misc
-                    .iter()
-                    .map(|(hdl, node)| (*hdl, node.type_name()))
-                    .collect::<Vec<(Handle, &str)>>()
-            ),
+            Impulse::Probe(dest) => println!("{}", Self::type_name()),
 
             Impulse::Stop => {
                 reactor.spawn(sender.send(Impulse::Stop).then(|_| Ok(())))
@@ -333,5 +361,127 @@ impl<S: Soma> Soma for Organelle<S> {
 
             _ => unreachable!(),
         })
+    }
+}
+
+impl<S: Soma + 'static> IntoFuture for Organelle<S> {
+    type Item = Result<()>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self::Item, Error = Self::Error>>;
+
+    /// convert the soma into a future that can be run on an event loop
+    fn into_future(mut self) -> Self::Future {
+        let (queue_tx, queue_rx) = (
+            self.sender.clone(),
+            mem::replace(&mut self.receiver, None).unwrap(),
+        );
+
+        let main_soma = Handle::new_v4();
+
+        let sender = queue_tx.clone();
+
+        let reactor_copy = self.reactor.clone();
+
+        self.reactor.clone().spawn(
+            queue_tx
+                .clone()
+                .send(Impulse::Init(
+                    None,
+                    Effector {
+                        this_soma: main_soma,
+                        sender: sender,
+                        reactor: self.reactor.clone(),
+                    },
+                ))
+                .and_then(|tx| {
+                    tx.send(Impulse::Start).then(|result| match result {
+                        Ok(_) => Ok(()),
+                        Err(e) => panic!("unable to start main soma: {:?}", e),
+                    })
+                })
+                .then(|result| match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => panic!("unable to initialize main soma: {:?}", e),
+                }),
+        );
+
+        let (tx, rx) = mpsc::channel::<Error>(1);
+
+        let stream_future = queue_rx
+            .take_while(|imp| match *imp {
+                Impulse::Stop => Ok(false),
+                _ => Ok(true),
+            })
+            .fold(Some(self), move |soma, imp| {
+                let result =
+                    match imp {
+                        Impulse::Init(parent, effector) => soma.unwrap()
+                            .update(Impulse::Init(parent, effector)),
+                        Impulse::AddInput(input, role) => {
+                            soma.unwrap().update(Impulse::AddInput(input, role))
+                        },
+                        Impulse::AddOutput(output, role) => soma.unwrap()
+                            .update(Impulse::AddOutput(output, role)),
+
+                        Impulse::Start => soma.unwrap().update(Impulse::Start),
+
+                        Impulse::Payload(src, dest, msg) => {
+                            // messages should only be sent to our soma
+                            assert_eq!(dest, main_soma);
+
+                            soma.unwrap().update(Impulse::Signal(src, msg))
+                        },
+                        Impulse::Probe(dest) => {
+                            // probes should only be send to our soma
+                            assert_eq!(dest, main_soma);
+                            soma.unwrap().update(Impulse::Probe(dest))
+                        },
+
+                        Impulse::Err(e) => Err(e.into()),
+
+                        _ => unreachable!(),
+                    };
+
+                match result {
+                    Ok(soma) => future::ok(Some(soma)),
+                    Err(e) => {
+                        reactor_copy.spawn(
+                            tx.clone()
+                                .send(Error::with_chain(
+                                    e,
+                                    ErrorKind::SomaError,
+                                ))
+                                .then(|result| match result {
+                                    Ok(_) => Ok(()),
+                                    Err(e) => {
+                                        panic!("unable to send error: {:?}", e)
+                                    },
+                                }),
+                        );
+
+                        future::ok(None)
+                    },
+                }
+            })
+            .then(move |_| {
+                // make sure the channel stays open
+                let _keep_alive = queue_tx;
+
+                Ok(())
+            });
+
+        Box::new(
+            stream_future
+                .map(|_| Ok(()))
+                .select(
+                    rx.into_future()
+                        .map(|(item, _)| Err(item.unwrap()))
+                        .map_err(|_| ()),
+                )
+                .map(|(result, _)| result)
+                .map_err(|_| -> Error {
+                    ErrorKind::Msg("select error".into()).into()
+                }),
+        )
     }
 }
