@@ -183,22 +183,78 @@ impl<S: Soma + 'static> Organelle<S> {
         let main_hdl = self.main_hdl;
         let external_sender = effector.sender;
         let nodes = self.nodes.clone();
-        let forward_reactor = reactor.clone();
 
-        let stream_future = queue_rx.for_each(move |msg| {
-            Self::forward(
-                organelle_hdl,
-                main_hdl,
-                &nodes,
-                external_sender.clone(),
-                &forward_reactor,
-                msg,
-            ).unwrap();
+        reactor.spawn(async_block! {
+            #[async]
+            for imp in queue_rx {
+                match imp {
+                    Impulse::Payload(src, dest, msg) => {
+                        let actual_src = {
+                            // check if src is the main soma
+                            if src == main_hdl {
+                                // if src is the main node, then it becomes tricky.
+                                // these are allowed to send to both internal and
+                                // external somas, so the question becomes whether or
+                                // not to advertise itself as the soma or the organelle
+
+                                if dest == organelle_hdl
+                                    || nodes.contains_key(&dest)
+                                {
+                                    // internal node - use src
+                                    src
+                                } else {
+                                    // external node - use organelle hdl
+                                    organelle_hdl
+                                }
+                            } else {
+                                src
+                            }
+                        };
+
+                        if dest == organelle_hdl {
+                            let sender = nodes.get(&main_hdl).unwrap().clone();
+
+                            await!(sender
+                                .send(Impulse::Signal(actual_src, msg))
+                                .map_err(|_| ())
+                            )?;
+                        } else if nodes.contains_key(&dest) {
+                            let sender = nodes.get(&dest).unwrap().clone();
+
+                            // send to internal node
+                            await!(sender
+                                .send(Impulse::Signal(actual_src, msg))
+                                .map_err(|_| ())
+                            )?;
+                        } else {
+                            // send to external node
+                            await!(external_sender.clone()
+                                .send(Impulse::<T, U>::convert_protocol(
+                                    Impulse::Payload(actual_src, dest, msg),
+                                )).map_err(|_| ())
+                            )?;
+                        }
+                    },
+
+                    Impulse::Probe(_) => println!("{}", Self::type_name()),
+
+                    Impulse::Stop => {
+                        await!(external_sender.clone()
+                            .send(Impulse::Stop).map_err(|_| ())
+                        )?;
+                    },
+                    Impulse::Err(e) => {
+                        await!(external_sender.clone()
+                            .send(Impulse::Err(e)).map_err(|_| ())
+                        )?;
+                    },
+
+                    _ => unimplemented!(),
+                }
+            }
 
             Ok(())
         });
-
-        reactor.spawn(stream_future);
 
         Ok(self)
     }
@@ -283,87 +339,6 @@ impl<S: Soma + 'static> Organelle<S> {
 
                 _ => unreachable!(),
             };
-        }
-
-        Ok(())
-    }
-
-    fn forward<T, U>(
-        organelle: Handle,
-        main_hdl: Handle,
-        nodes: &HashMap<Handle, mpsc::Sender<Impulse<S::Signal, S::Synapse>>>,
-        sender: mpsc::Sender<Impulse<T, U>>,
-        reactor: &reactor::Handle,
-        msg: Impulse<S::Signal, S::Synapse>,
-    ) -> Result<()>
-    where
-        S::Signal: From<T> + Into<T> + Signal,
-        T: From<S::Signal> + Into<S::Signal> + Signal,
-
-        S::Synapse: From<U> + Into<U> + Synapse,
-        U: From<S::Synapse> + Into<S::Synapse> + Synapse,
-    {
-        match msg {
-            Impulse::Payload(src, dest, msg) => {
-                let actual_src = {
-                    // check if src is the main soma
-                    if src == main_hdl {
-                        // if src is the main node, then it becomes tricky.
-                        // these are allowed to send to both internal and
-                        // external somas, so the question becomes whether or
-                        // not to advertise itself as the soma or the organelle
-
-                        if dest == organelle || nodes.contains_key(&dest) {
-                            // internal node - use src
-                            src
-                        } else {
-                            // external node - use organelle hdl
-                            organelle
-                        }
-                    } else {
-                        src
-                    }
-                };
-
-                if dest == organelle {
-                    if let Some(main) = nodes.get(&main_hdl) {
-                        reactor.spawn(
-                            main.clone()
-                                .send(Impulse::Signal(actual_src, msg))
-                                .then(|_| future::ok(())),
-                        );
-                    } else {
-                        bail!("main soma not found")
-                    }
-                } else if let Some(soma) = nodes.get(&dest) {
-                    // send to internal node
-                    reactor.spawn(
-                        soma.clone()
-                            .send(Impulse::Signal(actual_src, msg))
-                            .then(|_| future::ok(())),
-                    );
-                } else {
-                    // send to external node
-                    reactor.spawn(
-                        sender
-                            .send(Impulse::<T, U>::convert_protocol(
-                                Impulse::Payload(actual_src, dest, msg),
-                            ))
-                            .then(|_| Ok(())),
-                    );
-                }
-            },
-
-            Impulse::Probe(_) => println!("{}", Self::type_name()),
-
-            Impulse::Stop => {
-                reactor.spawn(sender.send(Impulse::Stop).then(|_| Ok(())))
-            },
-            Impulse::Err(e) => {
-                reactor.spawn(sender.send(Impulse::Err(e)).then(|_| Ok(())))
-            },
-
-            _ => unimplemented!(),
         }
 
         Ok(())
