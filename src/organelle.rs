@@ -80,7 +80,7 @@ impl<S: Soma + 'static> Organelle<S> {
     /// as long as the soma's message type can convert Into and From the
     /// organelle's message type, it can be added to the organelle and can
     /// communicate with any somas that do the same.
-    pub fn add_soma<T>(&mut self, soma: T) -> Handle
+    pub fn add_soma<T>(&mut self, mut soma: T) -> Handle
     where
         T: Soma + 'static,
 
@@ -92,59 +92,37 @@ impl<S: Soma + 'static> Organelle<S> {
     {
         let handle = Handle::new_v4();
         let organelle_sender = self.sender.clone();
-        let reactor = self.reactor.clone();
 
         let (tx, rx) = mpsc::channel(10);
 
-        self.reactor.spawn(Self::process_child_impulses(
-            soma,
-            rx,
-            organelle_sender,
-        ));
+        self.reactor.spawn(async_block! {
+            #[async]
+            for imp in rx {
+                match &imp {
+                    &Impulse::AddInput(_, _) => println!("adding input"),
+                    &Impulse::AddOutput(_, _) => println!("adding output"),
+
+                    _ => println!("misc impulse"),
+                }
+
+                soma = match await!(soma.update(
+                    Impulse::<T::Signal, T::Synapse>::convert_protocol(imp)
+                )) {
+                    Ok(soma) => soma,
+                    Err(e) => {
+                        return await!(organelle_sender.clone().send(Impulse::Err(
+                            Error::with_chain(e, ErrorKind::SomaError)
+                        ))).map(|_| ()).map_err(|_| ())
+                    },
+                };
+            }
+
+            Ok(())
+        });
 
         self.nodes.insert(handle, tx);
 
         handle
-    }
-
-    #[async]
-    fn process_child_impulses<T>(
-        mut soma: T,
-        queue: mpsc::Receiver<Impulse<S::Signal, S::Synapse>>,
-        organelle_sender: mpsc::Sender<Impulse<S::Signal, S::Synapse>>,
-    ) -> std::result::Result<(), ()>
-    where
-        T: Soma + 'static,
-
-        S::Signal: From<T::Signal> + Into<T::Signal> + Signal,
-        T::Signal: From<S::Signal> + Into<S::Signal> + Signal,
-
-        S::Synapse: From<T::Synapse> + Into<T::Synapse> + Synapse,
-        T::Synapse: From<S::Synapse> + Into<S::Synapse> + Synapse,
-    {
-        #[async]
-        for imp in queue {
-            match &imp {
-                &Impulse::AddInput(_, _) => println!("adding input"),
-                &Impulse::AddOutput(_, _) => println!("adding output"),
-
-                _ => println!("misc impulse"),
-            }
-            soma = match await!(soma.update(
-                Impulse::<T::Signal, T::Synapse>::convert_protocol(imp)
-            )) {
-                Ok(soma) => soma,
-                Err(e) => {
-                    await!(organelle_sender.clone().send(Impulse::Err(
-                        Error::with_chain(e, ErrorKind::SomaError)
-                    ))).map_err(|_| ())?;
-
-                    return Ok(());
-                },
-            };
-        }
-
-        Ok(())
     }
 
     /// connect input to output and update them accordingly
@@ -440,8 +418,6 @@ impl<S: Soma + 'static> IntoFuture for Organelle<S> {
         let main_soma = Handle::new_v4();
 
         let sender = queue_tx.clone();
-
-        let reactor_copy = self.reactor.clone();
 
         self.reactor.clone().spawn(
             queue_tx

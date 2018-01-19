@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::intrinsics;
 
-use futures::future;
 use futures::prelude::*;
 
 use super::{Error, Impulse};

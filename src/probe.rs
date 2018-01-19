@@ -1,7 +1,6 @@
 use futures::future;
-use futures::prelude::*;
 
-use super::{Effector, Error, Handle, Impulse, Result, Soma};
+use super::{Effector, Error, Handle, Impulse, Soma};
 
 /// data returned by probe operation
 #[derive(Debug)]

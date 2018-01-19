@@ -2,7 +2,6 @@ use std;
 use std::collections::HashMap;
 use std::intrinsics;
 
-use futures::future;
 use futures::prelude::*;
 
 use super::{Effector, Error, Handle, Impulse, Result, Signal, Soma, Synapse};
