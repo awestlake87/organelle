@@ -1,7 +1,9 @@
+#![feature(proc_macro, conservative_impl_trait, generators)]
+
 //#[macro_use]
 extern crate error_chain;
 
-extern crate futures;
+extern crate futures_await as futures;
 extern crate organelle;
 extern crate tokio_core;
 
@@ -25,21 +27,28 @@ impl Neuron for ProbeControllerSoma {
     type Signal = ProbeSignal;
     type Synapse = ProbeSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         self,
-        axon: &Axon<ProbeSignal, ProbeSynapse>,
-        imp: Impulse<ProbeSignal, ProbeSynapse>,
-    ) -> Result<Self> {
+        axon: Axon<Self::Signal, Self::Synapse>,
+        imp: Impulse<Self::Signal, Self::Synapse>,
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match imp {
             Impulse::Start => {
                 axon.send_req_output(
                     ProbeSynapse::ProbeController,
                     ProbeSignal::RequestProbe,
                 )?;
-                Ok(self)
+                Ok((self, axon))
             },
-            _ => Ok(self),
+            _ => Ok((self, axon)),
         }
     }
 }
@@ -50,7 +59,9 @@ impl Soma for Placeholder1 {
     type Signal = ProbeSignal;
     type Synapse = ProbeSynapse;
     type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
+    #[async(boxed)]
     fn update(self, _: Impulse<ProbeSignal, ProbeSynapse>) -> Result<Self> {
         Ok(self)
     }
@@ -62,7 +73,9 @@ impl Soma for Placeholder2 {
     type Signal = ProbeSignal;
     type Synapse = ProbeSynapse;
     type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
+    #[async(boxed)]
     fn update(self, _: Impulse<ProbeSignal, ProbeSynapse>) -> Result<Self> {
         Ok(self)
     }

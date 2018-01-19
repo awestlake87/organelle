@@ -1,7 +1,9 @@
+#![feature(proc_macro, conservative_impl_trait, generators)]
+
 #[macro_use]
 extern crate error_chain;
 
-extern crate futures;
+extern crate futures_await as futures;
 extern crate organelle;
 extern crate tokio_core;
 
@@ -58,12 +60,19 @@ impl Neuron for IncrementerSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match msg {
             Impulse::Start => {
                 axon.send_req_output(
@@ -71,7 +80,7 @@ impl Neuron for IncrementerSoma {
                     IncrementerSignal::Increment,
                 )?;
 
-                Ok(self)
+                Ok((self, axon))
             },
 
             Impulse::Signal(_, IncrementerSignal::Ack) => {
@@ -80,7 +89,7 @@ impl Neuron for IncrementerSoma {
                     IncrementerSignal::Increment,
                 )?;
 
-                Ok(self)
+                Ok((self, axon))
             },
 
             _ => bail!("unexpected message"),
@@ -136,14 +145,21 @@ impl Neuron for CounterSoma {
     type Signal = CounterSignal;
     type Synapse = CounterSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         mut self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match msg {
-            Impulse::Start => Ok(self),
+            Impulse::Start => Ok((self, axon)),
 
             Impulse::Signal(_, CounterSignal::BumpCounter) => {
                 println!("counter increment");
@@ -160,7 +176,7 @@ impl Neuron for CounterSoma {
                     axon.effector()?.stop();
                 }
 
-                Ok(self)
+                Ok((self, axon))
             },
 
             _ => bail!("unexpected message"),
@@ -184,14 +200,21 @@ impl Neuron for ForwarderSoma {
     type Signal = CounterSignal;
     type Synapse = CounterSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match msg {
-            Impulse::Start => Ok(self),
+            Impulse::Start => Ok((self, axon)),
 
             Impulse::Signal(src, msg) => {
                 if src == axon.req_input(CounterSynapse::Incrementer)? {
@@ -212,7 +235,7 @@ impl Neuron for ForwarderSoma {
                     axon.send_req_input(CounterSynapse::Incrementer, msg)?;
                 }
 
-                Ok(self)
+                Ok((self, axon))
             },
 
             _ => bail!("unexpected message"),
@@ -281,12 +304,19 @@ impl Neuron for RemoteIncrementerSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         mut self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         imp: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match imp {
             Impulse::Start => {
                 let effector = axon.effector()?.remote();
@@ -310,7 +340,7 @@ impl Neuron for RemoteIncrementerSoma {
             _ => bail!("unexpected impulse"),
         }
 
-        Ok(self)
+        Ok((self, axon))
     }
 }
 
@@ -360,7 +390,9 @@ impl Soma for InitErrorSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
     type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Error>>;
 
+    #[async(boxed)]
     fn update(self, msg: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         match msg {
             Impulse::Init(_, effector) => {
@@ -386,7 +418,9 @@ impl Soma for UpdateErrorSoma {
     type Signal = IncrementerSignal;
     type Synapse = IncrementerSynapse;
     type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Error>>;
 
+    #[async(boxed)]
     fn update(self, _: Impulse<Self::Signal, Self::Synapse>) -> Result<Self> {
         bail!("update failed")
     }

@@ -1,3 +1,6 @@
+use futures::future;
+use futures::prelude::*;
+
 use super::{Effector, Error, Handle, Impulse, Result, Soma};
 
 /// data returned by probe operation
@@ -49,23 +52,25 @@ impl Soma for ProbeSoma {
     type Signal = ProbeSignal;
     type Synapse = ProbeSynapse;
     type Error = Error;
+    type Future = future::FutureResult<Self, Error>;
 
-    fn update(self, msg: Impulse<ProbeSignal, ProbeSynapse>) -> Result<Self> {
+    fn update(self, msg: Impulse<ProbeSignal, ProbeSynapse>) -> Self::Future {
         match msg {
-            Impulse::Init(parent, effector) => Ok(Self {
+            Impulse::Init(parent, effector) => future::ok(Self {
                 parent: parent,
                 effector: Some(effector),
             }),
-            Impulse::Start => Ok(self),
+            Impulse::Start => future::ok(self),
             Impulse::Signal(_, ProbeSignal::RequestProbe) => {
                 if let Some(parent) = self.parent {
                     self.effector.as_ref().unwrap().probe(parent);
+
+                    future::ok(self)
                 } else {
-                    bail!("probe soma cannot be used standalone")
+                    future::err("probe soma cannot be used standalone".into())
                 }
-                Ok(self)
             },
-            _ => Ok(self),
+            _ => future::ok(self),
         }
     }
 }

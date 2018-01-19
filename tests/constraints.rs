@@ -1,7 +1,9 @@
+#![feature(proc_macro, conservative_impl_trait, generators)]
+
 #[macro_use]
 extern crate error_chain;
 
-extern crate futures;
+extern crate futures_await as futures;
 extern crate organelle;
 extern crate tokio_core;
 
@@ -34,12 +36,19 @@ impl Neuron for GiveSomethingSoma {
     type Signal = TestSignal;
     type Synapse = TestSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match msg {
             Impulse::Start => {
                 axon.send_req_output(
@@ -47,7 +56,7 @@ impl Neuron for GiveSomethingSoma {
                     TestSignal::Something,
                 )?;
 
-                Ok(self)
+                Ok((self, axon))
             },
             _ => bail!("unexpected message"),
         }
@@ -70,19 +79,26 @@ impl Neuron for TakeSomethingSoma {
     type Signal = TestSignal;
     type Synapse = TestSynapse;
     type Error = Error;
+    type Future = Box<
+        Future<
+            Item = (Self, Axon<Self::Signal, Self::Synapse>),
+            Error = Self::Error,
+        >,
+    >;
 
+    #[async(boxed)]
     fn update(
         self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Axon<Self::Signal, Self::Synapse>)> {
         match msg {
-            Impulse::Start => Ok(self),
+            Impulse::Start => Ok((self, axon)),
 
             Impulse::Signal(_, TestSignal::Something) => {
                 axon.effector()?.stop();
 
-                Ok(self)
+                Ok((self, axon))
             },
 
             _ => bail!("unexpected message"),
@@ -111,7 +127,7 @@ fn test_invalid_input() {
 
 #[test]
 fn test_require_one() {
-    // make sure require one works as intended
+    println!("make sure require one works as intended");
     {
         let mut core = reactor::Core::new().unwrap();
 
@@ -126,7 +142,7 @@ fn test_require_one() {
         core.run(organelle.into_future()).unwrap();
     }
 
-    // make sure require one fails as intended
+    println!("make sure require one fails as intended");
     {
         let mut core = reactor::Core::new().unwrap();
 

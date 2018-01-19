@@ -2,6 +2,9 @@ use std;
 use std::collections::HashMap;
 use std::intrinsics;
 
+use futures::future;
+use futures::prelude::*;
+
 use super::{Effector, Error, Handle, Impulse, Result, Signal, Soma, Synapse};
 
 /// defines dendrites on how connections can be made
@@ -77,30 +80,31 @@ impl<S: Signal, Y: Synapse> Axon<S, Y> {
     ///
     /// if axon handles the given message, it consumes it, otherwise it is
     /// returned so that the soma can use it.
+    #[async]
     pub fn update(
-        &mut self,
+        mut self,
         msg: Impulse<S, Y>,
-    ) -> Result<Option<Impulse<S, Y>>> {
+    ) -> Result<(Self, Option<Impulse<S, Y>>)> {
         match msg {
             Impulse::Init(_, effector) => {
                 self.init(effector)?;
-                Ok(None)
+                Ok((self, None))
             },
 
             Impulse::AddInput(input, role) => {
                 self.add_input(input, role)?;
-                Ok(None)
+                Ok((self, None))
             },
             Impulse::AddOutput(output, role) => {
                 self.add_output(output, role)?;
-                Ok(None)
+                Ok((self, None))
             },
             Impulse::Start => {
                 self.verify()?;
-                Ok(Some(Impulse::Start))
+                Ok((self, Some(Impulse::Start)))
             },
 
-            msg @ _ => Ok(Some(msg)),
+            msg @ _ => Ok((self, Some(msg))),
         }
     }
 
@@ -280,20 +284,26 @@ where
     type Signal = N::Signal;
     type Synapse = N::Synapse;
     type Error = N::Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
+    #[async(boxed)]
     fn update(
-        mut self,
+        self,
         msg: Impulse<Self::Signal, Self::Synapse>,
     ) -> std::result::Result<Self, Self::Error> {
-        if let Some(msg) = self.axon.update(msg)? {
-            let nucleus = self.nucleus.update(&self.axon, msg)?;
+        match await!(self.axon.update(msg))? {
+            (axon, Some(msg)) => {
+                let (nucleus, axon) = await!(self.nucleus.update(axon, msg))?;
 
-            Ok(Sheath {
-                axon: self.axon,
-                nucleus: nucleus,
-            })
-        } else {
-            Ok(self)
+                Ok(Sheath {
+                    axon: axon,
+                    nucleus: nucleus,
+                })
+            },
+            (axon, None) => Ok(Sheath {
+                axon: axon,
+                nucleus: self.nucleus,
+            }),
         }
     }
 }
@@ -306,6 +316,11 @@ pub trait Neuron: Sized {
     type Synapse: Synapse;
     /// error that occurs when an update fails
     type Error: std::error::Error + Send + From<Error> + 'static;
+    /// future that represents the update task
+    type Future: Future<
+        Item = (Self, Axon<Self::Signal, Self::Synapse>),
+        Error = Self::Error,
+    >;
 
     /// get the name of the soma
     fn type_name() -> &'static str {
@@ -315,7 +330,7 @@ pub trait Neuron: Sized {
     /// update the nucleus with the Axon and soma message
     fn update(
         self,
-        axon: &Axon<Self::Signal, Self::Synapse>,
+        axon: Axon<Self::Signal, Self::Synapse>,
         msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> std::result::Result<Self, Self::Error>;
+    ) -> Self::Future;
 }

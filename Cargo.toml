@@ -10,7 +10,7 @@ repository = "https://github.com/awestlake87/organelle"
 
 [dependencies]
 error-chain = "0.11"
-futures = "0.1"
+futures-await = "0.1"
 tokio = "0.0"
 tokio-core = "0.1"
 uuid = { version = "0.5", features = ["serde", "v4"] }

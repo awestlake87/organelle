@@ -3,6 +3,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::intrinsics;
 
+use futures::future;
+use futures::prelude::*;
+
 use super::{Error, Impulse};
 
 /// defines the collection of traits necessary to act as a soma message
@@ -34,6 +37,8 @@ pub trait Soma: Sized {
     type Synapse: Synapse;
     /// error when a soma fails to update
     type Error: std::error::Error + Send + From<Error> + 'static;
+    /// future representing the update task
+    type Future: Future<Item = Self, Error = Self::Error>;
 
     /// the name of the soma
     fn type_name() -> &'static str {
@@ -41,10 +46,6 @@ pub trait Soma: Sized {
     }
 
     /// apply any changes to the soma's state as a result of _msg
-    fn update(
-        self,
-        _msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> std::result::Result<Self, Self::Error> {
-        Ok(self)
-    }
+    fn update(self, _msg: Impulse<Self::Signal, Self::Synapse>)
+        -> Self::Future;
 }

@@ -1,12 +1,12 @@
 #![warn(missing_docs)]
-#![feature(core_intrinsics)]
+#![feature(core_intrinsics, proc_macro, conservative_impl_trait, generators)]
 
 //! Organelle - reactive architecture for emergent AI systems
 
 #[macro_use]
 extern crate error_chain;
 
-extern crate futures;
+extern crate futures_await as futures;
 extern crate tokio;
 extern crate tokio_core;
 extern crate uuid;
