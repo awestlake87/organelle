@@ -14,3 +14,6 @@ futures-await = "0.1"
 tokio = "0.0"
 tokio-core = "0.1"
 uuid = { version = "0.5", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tokio-timer = "0.1"

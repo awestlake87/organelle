@@ -6,12 +6,18 @@ extern crate error_chain;
 extern crate futures_await as futures;
 extern crate organelle;
 extern crate tokio_core;
+extern crate tokio_timer;
 extern crate uuid;
 
+use std::mem;
+use std::time;
+
+use futures::future;
 use futures::prelude::*;
 use futures::unsync;
 use organelle::*;
 use tokio_core::reactor;
+use tokio_timer::Timer;
 
 #[derive(Debug, Copy, Clone)]
 enum CounterRole {
@@ -91,12 +97,18 @@ impl From<CounterSynapse> for IncrementerSynapse {
     }
 }
 
-struct Incrementer;
+struct Incrementer {
+    timer: Timer,
+    tx: Option<unsync::mpsc::Sender<()>>,
+}
 
 impl Incrementer {
     fn axon() -> Axon<Self> {
         Axon::new(
-            Self {},
+            Self {
+                timer: Timer::default(),
+                tx: None,
+            },
             vec![],
             vec![Dendrite::One(IncrementerRole::Counter)],
         )
@@ -113,25 +125,45 @@ impl Soma for Incrementer {
         match imp {
             Impulse::AddOutput(
                 IncrementerRole::Counter,
-                IncrementerSynapse::Output(_),
+                IncrementerSynapse::Output(tx),
             ) => {
                 println!("incrementer got output");
 
-                Ok(self)
+                Ok(Self {
+                    timer: self.timer,
+                    tx: Some(tx),
+                })
             },
-            Impulse::Start(_) => Ok(self),
+            Impulse::Start(_) => loop {
+                await!(
+                    self.timer
+                        .sleep(time::Duration::from_millis(500))
+                        .map_err(|e| Error::with_chain(
+                            e,
+                            ErrorKind::SomaError
+                        ))
+                )?;
+
+                let tx = self.tx.as_ref().unwrap().clone();
+
+                await!(
+                    tx.send(()).map_err(|_| Error::from("unable to increment"))
+                )?;
+            },
 
             _ => bail!("unexpected impulse"),
         }
     }
 }
 
-struct Counter;
+struct Counter {
+    rx: Option<unsync::mpsc::Receiver<()>>,
+}
 
 impl Counter {
     fn axon() -> Axon<Self> {
         Axon::new(
-            Self {},
+            Self { rx: None },
             vec![Dendrite::One(CounterRole::Incrementer)],
             vec![],
         )
@@ -144,21 +176,42 @@ impl Soma for Counter {
     type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<Self::Role, Self::Synapse>) -> Result<Self> {
+    fn update(
+        mut self,
+        imp: Impulse<Self::Role, Self::Synapse>,
+    ) -> Result<Self> {
         match imp {
             Impulse::AddInput(
                 CounterRole::Incrementer,
-                CounterSynapse::Input(_),
+                CounterSynapse::Input(rx),
             ) => {
                 println!("counter got input");
 
-                Ok(self)
+                Ok(Self { rx: Some(rx) })
             },
             Impulse::Start(tx) => {
+                let rx = mem::replace(&mut self.rx, None).unwrap();
+                let mut i = 0;
+
+                await!(
+                    rx.take_while(move |_| {
+                        i += 1;
+
+                        println!("counter {}...", i);
+
+                        Ok((i < 5))
+                    }).for_each(|_| Ok(()))
+                        .and_then(|_| Ok(()))
+                        .or_else(|_| Err(Error::from(
+                            "unable to receive increment"
+                        )))
+                )?;
+
                 await!(
                     tx.send(Impulse::Stop)
                         .map_err(|_| Error::from("unable to stop gracefully"))
                 )?;
+
                 Ok(self)
             },
 
@@ -181,13 +234,4 @@ fn test_organelle() {
         .unwrap();
 
     core.run(organelle.run()).unwrap();
-}
-
-#[test]
-fn test_soma() {
-    let mut core = reactor::Core::new().unwrap();
-
-    let counter = Counter {};
-
-    core.run(counter.run()).unwrap();
 }
