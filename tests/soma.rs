@@ -171,10 +171,9 @@ impl Soma for Counter {
 fn test_organelle() {
     let mut core = reactor::Core::new().unwrap();
 
-    let mut organelle =
-        Organelle::<IncrementerRole, IncrementerSynapse>::new(core.handle());
+    let mut organelle = Organelle::new(Incrementer::axon(), core.handle());
 
-    let incrementer = organelle.add_soma(Incrementer::axon());
+    let incrementer = organelle.main();
     let counter = organelle.add_soma(Counter::axon());
 
     organelle

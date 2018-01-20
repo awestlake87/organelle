@@ -167,39 +167,49 @@ pub trait Soma: Sized {
 /// organisms capable of more complex tasks. however, organelles are still
 /// essentially somas, so they can used in larger organelles as long as they
 /// comply with their standards.
-pub struct Organelle<R, S>
+pub struct Organelle<T: Soma>
 where
-    R: Role + Into<(S, S)>,
-    S: Synapse,
+    T: Soma,
 {
     handle: reactor::Handle,
 
-    somas: HashMap<Uuid, unsync::mpsc::Sender<Impulse<R, S>>>,
+    main: Uuid,
+
+    somas: HashMap<Uuid, unsync::mpsc::Sender<Impulse<T::Role, T::Synapse>>>,
 }
 
-impl<R, S> Organelle<R, S>
-where
-    R: Role + Into<(S, S)> + 'static,
-    S: Synapse + 'static,
-{
+impl<T: Soma + 'static> Organelle<T> {
     /// create a new organelle
-    pub fn new(handle: reactor::Handle) -> Self {
-        Self {
+    pub fn new(main: T, handle: reactor::Handle) -> Self {
+        let mut organelle = Self {
             handle: handle,
 
+            main: Uuid::new_v4(),
+
             somas: HashMap::new(),
-        }
+        };
+
+        let main = organelle.add_soma(main);
+        organelle.main = main;
+
+        organelle
+    }
+
+    /// get the main soma's uuid
+    pub fn main(&self) -> Uuid {
+        self.main
     }
 
     /// add a soma to the organelle
-    pub fn add_soma<T: Soma + 'static>(&mut self, mut soma: T) -> Uuid
+    pub fn add_soma<U: Soma + 'static>(&mut self, mut soma: U) -> Uuid
     where
-        T::Role: From<R> + Into<R>,
-        T::Synapse: From<S> + Into<S>,
+        U::Role: From<T::Role> + Into<T::Role>,
+        U::Synapse: From<T::Synapse> + Into<T::Synapse>,
     {
         let uuid = Uuid::new_v4();
 
-        let (tx, rx) = unsync::mpsc::channel::<Impulse<R, S>>(10);
+        let (tx, rx) =
+            unsync::mpsc::channel::<Impulse<T::Role, T::Synapse>>(10);
         let handle = self.handle.clone();
 
         self.handle.spawn(
@@ -212,7 +222,10 @@ where
                             handle.spawn(
                                 rx.for_each(move |imp| {
                                     sender.clone().send(
-                                        Impulse::<R, S>::convert_from(imp)
+                                        Impulse::<
+                                            T::Role,
+                                            T::Synapse,
+                                        >::convert_from(imp)
                                     ).then(|_| future::ok(()))
                                 })
                                 .then(|_| future::ok(())),
@@ -220,7 +233,7 @@ where
 
                             Impulse::Start(tx)
                         },
-                        _ => Impulse::<T::Role, T::Synapse>::convert_from(imp)
+                        _ => Impulse::<U::Role, U::Synapse>::convert_from(imp)
                     }))?;
                 }
 
@@ -234,7 +247,12 @@ where
     }
 
     /// connect two somas together using the specified role
-    pub fn connect(&self, input: Uuid, output: Uuid, role: R) -> Result<()> {
+    pub fn connect(
+        &self,
+        input: Uuid,
+        output: Uuid,
+        role: T::Role,
+    ) -> Result<()> {
         let (tx, rx) = role.into();
 
         let input_sender = if let Some(sender) = self.somas.get(&input) {
@@ -263,7 +281,10 @@ where
         Ok(())
     }
 
-    fn start_all(&self, tx: unsync::mpsc::Sender<Impulse<R, S>>) -> Result<()> {
+    fn start_all(
+        &self,
+        tx: unsync::mpsc::Sender<Impulse<T::Role, T::Synapse>>,
+    ) -> Result<()> {
         for sender in self.somas.values() {
             self.handle.spawn(
                 sender
@@ -277,17 +298,13 @@ where
     }
 }
 
-impl<R, S> Soma for Organelle<R, S>
-where
-    R: Role + Into<(S, S)> + 'static,
-    S: Synapse + 'static,
-{
-    type Role = R;
-    type Synapse = S;
+impl<T: Soma + 'static> Soma for Organelle<T> {
+    type Role = T::Role;
+    type Synapse = T::Synapse;
     type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<R, S>) -> Result<Self> {
+    fn update(self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
         match imp {
             Impulse::Start(tx) => {
                 self.start_all(tx)?;
