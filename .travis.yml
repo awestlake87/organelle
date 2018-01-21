@@ -9,17 +9,12 @@ addons:
       - binutils-dev
 
 rust:
-  - stable
-  - beta
   - nightly
-
-matrix:
-  allow_failures:
-    - rust: nightly
 
 cache: cargo
 
 branches:
+  # don't re-run builds after semver tagging
   except:
     - /^v[0-9]+\.[0-9]+\.[0-9]+/
 
@@ -32,21 +27,12 @@ script:
   - |
       travis-cargo build &&
       travis-cargo test &&
-      travis-cargo bench &&
-      travis-cargo --only stable doc
+      travis-cargo bench
 
 deploy:
+  # deploy to crates
   - provider: script
     skip_cleanup: true
     on:
       branch: master
-      condition: -d ./target/doc # check that we're on stable
     script: scripts/deploy.sh
-
-  - provider: pages
-    skip_cleanup: true
-    github_token: $GH_TOKEN # Set in travis-ci.org dashboard
-    on:
-      branch: master
-      condition: -d ./target/doc
-    local_dir: ./target/doc
