@@ -1,5 +1,6 @@
 use std;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 use futures::prelude::*;
 use futures::unsync;
@@ -8,11 +9,11 @@ use tokio_core::reactor;
 use super::{Error, Result};
 
 /// trait alias to express requirements of a Role type
-pub trait Role: Debug + Copy + Clone {}
+pub trait Role: Debug + Copy + Clone + Hash + PartialEq + Eq {}
 
 impl<T> Role for T
 where
-    T: Debug + Copy + Clone,
+    T: Debug + Copy + Clone + Hash + PartialEq + Eq,
 {
 }
 

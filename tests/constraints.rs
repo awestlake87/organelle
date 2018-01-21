@@ -12,7 +12,7 @@ use futures::unsync;
 use organelle::*;
 use tokio_core::reactor;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 enum Role {
     GiveSomething,
 }
@@ -34,12 +34,14 @@ impl From<Role> for (Synapse, Synapse) {
     }
 }
 
-struct GiverSoma;
+struct GiverSoma {
+    tx: Option<unsync::mpsc::Sender<()>>,
+}
 
 impl GiverSoma {
     fn axon() -> Axon<Self> {
         Axon::new(
-            GiverSoma {},
+            GiverSoma { tx: None },
             vec![],
             vec![Dendrite::One(Role::GiveSomething)],
         )
@@ -56,20 +58,31 @@ impl Soma for GiverSoma {
     fn update(self, imp: Impulse<Self::Role, Self::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddOutput(Role::GiveSomething, Synapse::Giver(tx)) => {
-                Ok(self)
+                Ok(Self { tx: Some(tx) })
             },
-            Impulse::Start(_, _) => Ok(self),
+            Impulse::Start(_, _) => {
+                await!(
+                    self.tx
+                        .unwrap()
+                        .send(())
+                        .map_err(|_| Error::from("unable to give something"))
+                )?;
+
+                Ok(Self { tx: None })
+            },
             _ => bail!("unexpected impulse"),
         }
     }
 }
 
-struct TakerSoma;
+struct TakerSoma {
+    rx: Option<unsync::mpsc::Receiver<()>>,
+}
 
 impl TakerSoma {
     fn axon() -> Axon<Self> {
         Axon::new(
-            TakerSoma {},
+            TakerSoma { rx: None },
             vec![Dendrite::One(Role::GiveSomething)],
             vec![],
         )
@@ -86,9 +99,21 @@ impl Soma for TakerSoma {
     fn update(self, imp: Impulse<Self::Role, Self::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddInput(Role::GiveSomething, Synapse::Taker(rx)) => {
-                Ok(self)
+                Ok(Self { rx: Some(rx) })
             },
-            Impulse::Start(_, _) => Ok(self),
+            Impulse::Start(tx, _) => {
+                await!(
+                    self.rx
+                        .unwrap()
+                        .for_each(move |_| tx.clone()
+                            .send(Impulse::Stop)
+                            .map(|_| ())
+                            .map_err(|_| ()))
+                        .map_err(|_| Error::from("unable to stop"))
+                )?;
+
+                Ok(Self { rx: None })
+            },
             _ => bail!("unexpected impulse"),
         }
     }
@@ -104,14 +129,63 @@ fn test_invalid_input() {
     let giver1 = organelle.main();
     let giver2 = organelle.add_soma(GiverSoma::axon());
 
-    organelle.connect(giver1, giver2, Role::GiveSomething);
+    organelle
+        .connect(giver1, giver2, Role::GiveSomething)
+        .unwrap();
 
     if let Err(e) = core.run(organelle.run(handle)) {
         match e.kind() {
-            &ErrorKind::InvalidSynapse => (),
+            &ErrorKind::InvalidSynapse(ref msg) => {
+                println!("got expected error: {}", *msg)
+            },
             _ => panic!("GiverSoma spewed an unexpected error: {:#?}", e),
         }
     } else {
         panic!("GiverSoma should not accept this input")
+    }
+}
+
+#[test]
+fn test_require_one() {
+    let mut core = reactor::Core::new().unwrap();
+    let handle = core.handle();
+
+    // make sure require works as intended
+    {
+        let mut organelle = Organelle::new(GiverSoma::axon(), handle.clone());
+
+        let giver = organelle.main();
+        let taker = organelle.add_soma(TakerSoma::axon());
+
+        organelle
+            .connect(giver, taker, Role::GiveSomething)
+            .unwrap();
+
+        core.run(organelle.run(handle.clone())).unwrap();
+    }
+
+    // make sure require one fails as intended
+    {
+        if let Err(e) = core.run(TakerSoma::axon().run(handle.clone())) {
+            match e.kind() {
+                &ErrorKind::MissingSynapse(ref msg) => {
+                    println!("got expected error: {}", *msg)
+                },
+                _ => panic!("unexpected error: {:#?}", e),
+            }
+        } else {
+            panic!("TakerSoma has no input, so it should fail")
+        }
+
+        if let Err(e) = core.run(GiverSoma::axon().run(handle.clone())) {
+            match e.kind() {
+                &ErrorKind::MissingSynapse(ref msg) => {
+                    println!("got expected error: {}", *msg)
+                },
+                _ => panic!("unexpected error: {:#?}", e),
+            }
+        } else {
+            panic!("GiverSoma has no input, so it should fail")
+        }
     }
 }

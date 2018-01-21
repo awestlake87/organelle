@@ -18,7 +18,7 @@ use organelle::*;
 use tokio_core::reactor;
 use tokio_timer::Timer;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 enum CounterRole {
     Incrementer,
 }
@@ -40,7 +40,7 @@ impl From<CounterRole> for (CounterSynapse, CounterSynapse) {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 enum IncrementerRole {
     Counter,
 }
@@ -112,6 +112,24 @@ impl Incrementer {
             vec![Dendrite::One(IncrementerRole::Counter)],
         )
     }
+
+    #[async]
+    fn increment(sender: unsync::mpsc::Sender<()>, timer: Timer) -> Result<()> {
+        loop {
+            await!(
+                timer
+                    .sleep(time::Duration::from_millis(250))
+                    .map_err(|e| Error::with_chain(e, ErrorKind::SomaError))
+            )?;
+
+            await!(
+                sender
+                    .clone()
+                    .send(())
+                    .map_err(|_| Error::from("unable to increment"))
+            )?;
+        }
+    }
 }
 
 impl Soma for Incrementer {
@@ -141,31 +159,9 @@ impl Soma for Incrementer {
                 let sender = self.tx.as_ref().unwrap().clone();
                 let timer = mem::replace(&mut self.timer, None).unwrap();
 
-                handle.spawn(
-                    async_block! {
-                        loop {
-                            await!(
-                                timer
-                                    .sleep(time::Duration::from_millis(500))
-                                    .map_err(|e| Error::with_chain(
-                                        e,
-                                        ErrorKind::SomaError
-                                    ))
-                            )?;
-
-                            await!(
-                                sender.clone().send(())
-                                    .map_err(|_| Error::from(
-                                        "unable to increment"
-                                    ))
-                            )?;
-                        }
-
-                        Ok(())
-                    }.or_else(|e| {
-                        tx.send(Impulse::Error(e)).map(|_| ()).map_err(|_| ())
-                    }),
-                );
+                handle.spawn(Self::increment(sender, timer).or_else(|e| {
+                    tx.send(Impulse::Error(e)).map(|_| ()).map_err(|_| ())
+                }));
 
                 Ok(self)
             },

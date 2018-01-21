@@ -31,10 +31,16 @@ error_chain! {
             display("an error occurred while calling into a soma")
         }
 
-        /// axon failed to validate a connection
-        InvalidSynapse {
-            description("invalid connection between somas"),
-            display("invalid connection between somas")
+        /// axon failed to validate a synapse
+        InvalidSynapse(msg: String) {
+            description("invalid synapse given to somas"),
+            display("invalid synapse given to somas - {}", msg)
+        }
+
+        /// axon is missing a synapse
+        MissingSynapse(msg: String) {
+            description("missing synapse"),
+            display("invalid synapse - {}", msg)
         }
     }
 }

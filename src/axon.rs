@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use futures::prelude::*;
 
-use super::{Error, Impulse, Result, Soma};
+use super::{Error, ErrorKind, Impulse, Result, Soma};
 
 /// constraints that can be put on axons for validation purposes
 pub enum Dendrite<R> {
@@ -8,11 +10,16 @@ pub enum Dendrite<R> {
     One(R),
 }
 
+enum Requirement {
+    Unmet,
+    Met,
+}
+
 /// wrap a soma with a set of requirements that will be validated upon startup
 pub struct Axon<T: Soma + 'static> {
     soma: T,
-    inputs: Vec<Dendrite<T::Role>>,
-    outputs: Vec<Dendrite<T::Role>>,
+    inputs: HashMap<T::Role, (Dendrite<T::Role>, Requirement)>,
+    outputs: HashMap<T::Role, (Dendrite<T::Role>, Requirement)>,
 }
 
 impl<T: Soma + 'static> Axon<T> {
@@ -24,23 +31,92 @@ impl<T: Soma + 'static> Axon<T> {
     ) -> Self {
         Self {
             soma: soma,
-            inputs: inputs,
-            outputs: outputs,
+            inputs: inputs
+                .iter()
+                .map(|d| match d {
+                    &Dendrite::One(r) => {
+                        (r, (Dendrite::One(r), Requirement::Unmet))
+                    },
+                })
+                .collect(),
+            outputs: outputs
+                .iter()
+                .map(|d| match d {
+                    &Dendrite::One(r) => {
+                        (r, (Dendrite::One(r), Requirement::Unmet))
+                    },
+                })
+                .collect(),
         }
     }
 
-    fn add_input(&self, role: T::Role) -> Result<()> {
-        println!("add input role {:?}", role);
+    fn add_input(&mut self, role: T::Role) -> Result<()> {
+        if let Some(&mut (ref mut dendrite, ref mut req)) =
+            self.inputs.get_mut(&role)
+        {
+            match dendrite {
+                &mut Dendrite::One(_) => match req {
+                    &mut Requirement::Unmet => *req = Requirement::Met,
+                    &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
+                        format!("expected only one input for {:?}", role)
+                    )),
+                },
+            }
+        } else {
+            bail!(ErrorKind::InvalidSynapse(format!(
+                "no dendrites found for {:?}",
+                role
+            )))
+        }
+
         Ok(())
     }
 
-    fn add_output(&self, role: T::Role) -> Result<()> {
-        println!("add output role {:?}", role);
+    fn add_output(&mut self, role: T::Role) -> Result<()> {
+        if let Some(&mut (ref mut dendrite, ref mut req)) =
+            self.outputs.get_mut(&role)
+        {
+            match dendrite {
+                &mut Dendrite::One(_) => match req {
+                    &mut Requirement::Unmet => *req = Requirement::Met,
+                    &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
+                        format!("expected only one output for {:?}", role)
+                    )),
+                },
+            }
+        } else {
+            bail!(ErrorKind::InvalidSynapse(format!(
+                "no dendrites found for {:?}",
+                role
+            )))
+        }
+
         Ok(())
     }
 
     fn start(&self) -> Result<()> {
-        println!("axon validate");
+        for (role, &(ref dendrite, ref req)) in &self.inputs {
+            match dendrite {
+                &Dendrite::One(_) => match req {
+                    &Requirement::Met => (),
+                    &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
+                        format!("expected input synapse for {:?}", *role)
+                    )),
+                },
+            }
+        }
+
+        for (role, &(ref dendrite, ref req)) in &self.outputs {
+            match dendrite {
+                &Dendrite::One(_) => match req {
+                    &Requirement::Met => (),
+                    &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
+                        format!("expected output synapse for {:?}", *role)
+                    )),
+                },
+            }
+        }
+
         Ok(())
     }
 }
@@ -52,7 +128,7 @@ impl<T: Soma + 'static> Soma for Axon<T> {
     type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
+    fn update(mut self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
         Ok(Self {
             soma: match imp {
                 Impulse::AddInput(role, _) => {
