@@ -1,16 +1,5 @@
 language: rust
-
-addons:
-  apt:
-    packages:
-      - libcurl4-openssl-dev
-      - libelf-dev
-      - libdw-dev
-      - binutils-dev
-
-rust:
-  - nightly
-
+rust: nightly
 cache: cargo
 
 branches:
@@ -18,16 +7,11 @@ branches:
   except:
     - /^v[0-9]+\.[0-9]+\.[0-9]+/
 
-before_script:
-  - |
-      pip install 'travis-cargo<0.2' --user &&
-      export PATH=$HOME/.local/bin:$PATH
-
 script:
   - |
-      travis-cargo build &&
-      travis-cargo test &&
-      travis-cargo bench
+      cargo build &&
+      cargo test &&
+      cargo bench
 
 deploy:
   # deploy to crates
