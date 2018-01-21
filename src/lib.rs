@@ -67,7 +67,7 @@ pub enum Impulse<R: Role, S: Synapse> {
     ///
     /// you should always expect to handle this impulse because it will be
     /// passed to each soma regardless of configuration
-    Start(unsync::mpsc::Sender<Impulse<R, S>>),
+    Start(unsync::mpsc::Sender<Impulse<R, S>>, reactor::Handle),
     /// stop the event loop and exit gracefully
     ///
     /// you should not expect to handle this impulse at any time, it is handled
@@ -103,7 +103,7 @@ where
             Impulse::Stop => Impulse::Stop,
             Impulse::Error(e) => Impulse::Error(e),
 
-            Impulse::Start(_) => panic!("no automatic conversion for start"),
+            Impulse::Start(_, _) => panic!("no automatic conversion for start"),
         }
     }
 }
@@ -126,15 +126,17 @@ pub trait Soma: Sized {
     /// to) mpsc and oneshot channels. these can provide custom-tailored methods
     /// of communication between somas to ease the pain of async programming.
     type Synapse: Synapse;
+    /// the types of errors that this soma can return
+    type Error: std::error::Error + Send;
     /// the future representing a single update of the soma.
-    type Future: Future<Item = Self, Error = Error>;
+    type Future: Future<Item = Self, Error = Self::Error>;
 
     /// react to a single impulse
     fn update(self, imp: Impulse<Self::Role, Self::Synapse>) -> Self::Future;
 
     /// convert this soma into a future that can be passed to an event loop
     #[async(boxed)]
-    fn run(mut self) -> Result<()>
+    fn run(mut self, handle: reactor::Handle) -> Result<()>
     where
         Self: 'static,
     {
@@ -143,7 +145,7 @@ pub trait Soma: Sized {
 
         await!(
             tx.clone()
-                .send(Impulse::Start(tx))
+                .send(Impulse::Start(tx, handle))
                 .map_err(|_| Error::from("unable to send start signal"))
         )?;
 
@@ -153,7 +155,10 @@ pub trait Soma: Sized {
                 Impulse::Error(e) => bail!(e),
                 Impulse::Stop => break,
 
-                _ => self = await!(self.update(imp))?,
+                _ => {
+                    self = await!(self.update(imp))
+                        .chain_err(|| ErrorKind::SomaError)?
+                },
             }
         }
 
@@ -210,14 +215,13 @@ impl<T: Soma + 'static> Organelle<T> {
 
         let (tx, rx) =
             unsync::mpsc::channel::<Impulse<T::Role, T::Synapse>>(10);
-        let handle = self.handle.clone();
 
         self.handle.spawn(
             async_block! {
                 #[async]
                 for imp in rx.map_err(|_| Error::from("streams can't fail")) {
                     soma = await!(soma.update(match imp {
-                        Impulse::Start(sender) =>{
+                        Impulse::Start(sender, handle) =>{
                             let (tx, rx) = unsync::mpsc::channel(1);
                             handle.spawn(
                                 rx.for_each(move |imp| {
@@ -231,10 +235,10 @@ impl<T: Soma + 'static> Organelle<T> {
                                 .then(|_| future::ok(())),
                             );
 
-                            Impulse::Start(tx)
+                            Impulse::Start(tx, handle)
                         },
                         _ => Impulse::<U::Role, U::Synapse>::convert_from(imp)
-                    }))?;
+                    })).chain_err(|| ErrorKind::SomaError)?;
                 }
 
                 Ok(())
@@ -284,12 +288,13 @@ impl<T: Soma + 'static> Organelle<T> {
     fn start_all(
         &self,
         tx: unsync::mpsc::Sender<Impulse<T::Role, T::Synapse>>,
+        handle: reactor::Handle,
     ) -> Result<()> {
         for sender in self.somas.values() {
             self.handle.spawn(
                 sender
                     .clone()
-                    .send(Impulse::Start(tx.clone()))
+                    .send(Impulse::Start(tx.clone(), handle.clone()))
                     .then(|_| future::ok(())),
             );
         }
@@ -301,13 +306,14 @@ impl<T: Soma + 'static> Organelle<T> {
 impl<T: Soma + 'static> Soma for Organelle<T> {
     type Role = T::Role;
     type Synapse = T::Synapse;
-    type Future = Box<Future<Item = Self, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::Start(tx) => {
-                self.start_all(tx)?;
+            Impulse::Start(tx, handle) => {
+                self.start_all(tx, handle)?;
 
                 Ok(self)
             },
@@ -363,7 +369,8 @@ impl<T: Soma + 'static> Axon<T> {
 impl<T: Soma + 'static> Soma for Axon<T> {
     type Role = T::Role;
     type Synapse = T::Synapse;
-    type Future = Box<Future<Item = Self, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
@@ -372,17 +379,20 @@ impl<T: Soma + 'static> Soma for Axon<T> {
                 Impulse::AddInput(role, _) => {
                     self.add_input(role)?;
 
-                    await!(self.soma.update(imp))?
+                    await!(self.soma.update(imp))
+                        .chain_err(|| ErrorKind::SomaError)?
                 },
                 Impulse::AddOutput(role, _) => {
                     self.add_output(role)?;
 
-                    await!(self.soma.update(imp))?
+                    await!(self.soma.update(imp))
+                        .chain_err(|| ErrorKind::SomaError)?
                 },
-                Impulse::Start(_) => {
+                Impulse::Start(_, _) => {
                     self.start()?;
 
-                    await!(self.soma.update(imp))?
+                    await!(self.soma.update(imp))
+                        .chain_err(|| ErrorKind::SomaError)?
                 },
 
                 Impulse::Stop | Impulse::Error(_) => {

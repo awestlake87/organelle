@@ -12,7 +12,6 @@ extern crate uuid;
 use std::mem;
 use std::time;
 
-use futures::future;
 use futures::prelude::*;
 use futures::unsync;
 use organelle::*;
@@ -98,7 +97,7 @@ impl From<CounterSynapse> for IncrementerSynapse {
 }
 
 struct Incrementer {
-    timer: Timer,
+    timer: Option<Timer>,
     tx: Option<unsync::mpsc::Sender<()>>,
 }
 
@@ -106,7 +105,7 @@ impl Incrementer {
     fn axon() -> Axon<Self> {
         Axon::new(
             Self {
-                timer: Timer::default(),
+                timer: Some(Timer::default()),
                 tx: None,
             },
             vec![],
@@ -118,10 +117,14 @@ impl Incrementer {
 impl Soma for Incrementer {
     type Role = IncrementerRole;
     type Synapse = IncrementerSynapse;
-    type Future = Box<Future<Item = Self, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<Self::Role, Self::Synapse>) -> Result<Self> {
+    fn update(
+        mut self,
+        imp: Impulse<Self::Role, Self::Synapse>,
+    ) -> Result<Self> {
         match imp {
             Impulse::AddOutput(
                 IncrementerRole::Counter,
@@ -134,21 +137,37 @@ impl Soma for Incrementer {
                     tx: Some(tx),
                 })
             },
-            Impulse::Start(_) => loop {
-                await!(
-                    self.timer
-                        .sleep(time::Duration::from_millis(500))
-                        .map_err(|e| Error::with_chain(
-                            e,
-                            ErrorKind::SomaError
-                        ))
-                )?;
+            Impulse::Start(tx, handle) => {
+                let sender = self.tx.as_ref().unwrap().clone();
+                let timer = mem::replace(&mut self.timer, None).unwrap();
 
-                let tx = self.tx.as_ref().unwrap().clone();
+                handle.spawn(
+                    async_block! {
+                        loop {
+                            await!(
+                                timer
+                                    .sleep(time::Duration::from_millis(500))
+                                    .map_err(|e| Error::with_chain(
+                                        e,
+                                        ErrorKind::SomaError
+                                    ))
+                            )?;
 
-                await!(
-                    tx.send(()).map_err(|_| Error::from("unable to increment"))
-                )?;
+                            await!(
+                                sender.clone().send(())
+                                    .map_err(|_| Error::from(
+                                        "unable to increment"
+                                    ))
+                            )?;
+                        }
+
+                        Ok(())
+                    }.or_else(|e| {
+                        tx.send(Impulse::Error(e)).map(|_| ()).map_err(|_| ())
+                    }),
+                );
+
+                Ok(self)
             },
 
             _ => bail!("unexpected impulse"),
@@ -173,7 +192,8 @@ impl Counter {
 impl Soma for Counter {
     type Role = CounterRole;
     type Synapse = CounterSynapse;
-    type Future = Box<Future<Item = Self, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(
@@ -189,28 +209,39 @@ impl Soma for Counter {
 
                 Ok(Self { rx: Some(rx) })
             },
-            Impulse::Start(tx) => {
+            Impulse::Start(tx, handle) => {
+                let stopper = tx.clone();
                 let rx = mem::replace(&mut self.rx, None).unwrap();
-                let mut i = 0;
 
-                await!(
-                    rx.take_while(move |_| {
-                        i += 1;
+                handle.spawn(
+                    async_block! {
+                        let mut i = 0;
 
-                        println!("counter {}...", i);
+                        await!(
+                            rx.take_while(move |_| {
+                                i += 1;
 
-                        Ok((i < 5))
-                    }).for_each(|_| Ok(()))
-                        .and_then(|_| Ok(()))
-                        .or_else(|_| Err(Error::from(
-                            "unable to receive increment"
-                        )))
-                )?;
+                                println!("counter {}...", i);
 
-                await!(
-                    tx.send(Impulse::Stop)
-                        .map_err(|_| Error::from("unable to stop gracefully"))
-                )?;
+                                Ok((i < 5))
+                            }).for_each(|_| Ok(()))
+                                .and_then(|_| Ok(()))
+                                .or_else(|_| Err(Error::from(
+                                    "unable to receive increment"
+                                )))
+                        )?;
+
+                        await!(stopper.send(Impulse::Stop)
+                            .map_err(|_| Error::from(
+                                "unable to stop gracefully"
+                            ))
+                        )?;
+
+                        Ok(())
+                    }.or_else(|e| {
+                        tx.send(Impulse::Error(e)).map(|_| ()).map_err(|_| ())
+                    }),
+                );
 
                 Ok(self)
             },
@@ -223,8 +254,9 @@ impl Soma for Counter {
 #[test]
 fn test_organelle() {
     let mut core = reactor::Core::new().unwrap();
+    let handle = core.handle();
 
-    let mut organelle = Organelle::new(Incrementer::axon(), core.handle());
+    let mut organelle = Organelle::new(Incrementer::axon(), handle.clone());
 
     let incrementer = organelle.main();
     let counter = organelle.add_soma(Counter::axon());
@@ -233,5 +265,5 @@ fn test_organelle() {
         .connect(incrementer, counter, IncrementerRole::Counter)
         .unwrap();
 
-    core.run(organelle.run()).unwrap();
+    core.run(organelle.run(handle)).unwrap();
 }
