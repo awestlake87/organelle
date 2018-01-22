@@ -8,8 +8,11 @@ use super::{Error, ErrorKind, Impulse, Result, Soma};
 pub enum Dendrite<R> {
     /// only accept one synapse for the given role
     One(R),
+    /// accept any number of synapses for the given role
+    Variadic(R),
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum Requirement {
     Unmet,
     Met,
@@ -37,6 +40,9 @@ impl<T: Soma + 'static> Axon<T> {
                     &Dendrite::One(r) => {
                         (r, (Dendrite::One(r), Requirement::Unmet))
                     },
+                    &Dendrite::Variadic(r) => {
+                        (r, (Dendrite::Variadic(r), Requirement::Met))
+                    },
                 })
                 .collect(),
             outputs: outputs
@@ -44,6 +50,9 @@ impl<T: Soma + 'static> Axon<T> {
                 .map(|d| match d {
                     &Dendrite::One(r) => {
                         (r, (Dendrite::One(r), Requirement::Unmet))
+                    },
+                    &Dendrite::Variadic(r) => {
+                        (r, (Dendrite::Variadic(r), Requirement::Met))
                     },
                 })
                 .collect(),
@@ -61,6 +70,7 @@ impl<T: Soma + 'static> Axon<T> {
                         format!("expected only one input for {:?}", role)
                     )),
                 },
+                &mut Dendrite::Variadic(_) => (),
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
@@ -83,6 +93,7 @@ impl<T: Soma + 'static> Axon<T> {
                         format!("expected only one output for {:?}", role)
                     )),
                 },
+                &mut Dendrite::Variadic(_) => (),
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
@@ -103,6 +114,7 @@ impl<T: Soma + 'static> Axon<T> {
                         format!("expected input synapse for {:?}", *role)
                     )),
                 },
+                &Dendrite::Variadic(_) => assert_eq!(*req, Requirement::Met),
             }
         }
 
@@ -114,6 +126,7 @@ impl<T: Soma + 'static> Axon<T> {
                         format!("expected output synapse for {:?}", *role)
                     )),
                 },
+                &Dendrite::Variadic(_) => assert_eq!(*req, Requirement::Met),
             }
         }
 

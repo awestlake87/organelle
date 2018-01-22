@@ -1,3 +1,4 @@
+use std;
 use std::collections::HashMap;
 use std::mem;
 
@@ -7,7 +8,7 @@ use futures::unsync;
 use tokio_core::reactor;
 use uuid::Uuid;
 
-use super::{Error, Impulse, Result, Soma};
+use super::{Error, Impulse, Result, Role, Soma, Synapse};
 
 /// a soma designed to facilitate connections between other somas
 ///
@@ -54,51 +55,80 @@ impl<T: Soma + 'static> Organelle<T> {
         self.main
     }
 
-    /// add a soma to the organelle
-    pub fn add_soma<U: Soma + 'static>(&mut self, mut soma: U) -> Uuid
+    fn create_soma_channel<R, S>(
+        &mut self,
+    ) -> (Uuid, unsync::mpsc::Receiver<Impulse<R, S>>)
     where
-        U::Role: From<T::Role> + Into<T::Role>,
-        U::Synapse: From<T::Synapse> + Into<T::Synapse>,
+        R: Role + From<T::Role> + Into<T::Role> + 'static,
+        S: Synapse + From<T::Synapse> + Into<T::Synapse> + 'static,
     {
         let uuid = Uuid::new_v4();
 
         let (tx, rx) =
             unsync::mpsc::channel::<Impulse<T::Role, T::Synapse>>(10);
 
-        let main_tx = self.main_tx.clone();
+        let (soma_tx, soma_rx) = unsync::mpsc::channel::<Impulse<R, S>>(1);
 
-        self.handle.spawn(
-            async_block! {
-                #[async]
-                for imp in rx.map_err(|_| Error::from("streams can't fail")) {
-                    soma = await!(soma.update(match imp {
-                        Impulse::Start(sender, handle) =>{
-                            let (tx, rx) = unsync::mpsc::channel(1);
-                            handle.spawn(
-                                rx.for_each(move |imp| {
-                                    sender.clone().send(
+        self.handle.spawn(rx.for_each(move |imp| {
+            soma_tx
+                .clone()
+                .send(match imp {
+                    Impulse::Start(sender, handle) => {
+                        let (tx, rx) =
+                            unsync::mpsc::channel::<Impulse<R, S>>(1);
+
+                        handle.spawn(rx.for_each(move |imp| {
+                            sender.clone().send(
                                         Impulse::<
                                             T::Role,
                                             T::Synapse,
                                         >::convert_from(imp)
                                     ).then(|_| future::ok(()))
-                                })
-                                .then(|_| future::ok(())),
-                            );
+                        }).then(|_| future::ok(())));
 
-                            Impulse::Start(tx, handle)
-                        },
-                        _ => Impulse::<U::Role, U::Synapse>::convert_from(imp)
-                    })).map_err(|e| e.into())?;
-                }
-
-                Ok(())
-            }.or_else(|e: Error| {
-                main_tx.send(Impulse::Error(e)).map(|_| ()).map_err(|_| ())
-            }),
-        );
+                        Impulse::Start(tx, handle)
+                    },
+                    _ => Impulse::<R, S>::convert_from(imp),
+                })
+                .map(|_| ())
+                .map_err(|_| ())
+        }).map_err(|_| ()));
 
         self.somas.insert(uuid, tx);
+
+        (uuid, soma_rx)
+    }
+
+    #[async]
+    fn run_soma<U: Soma + 'static>(
+        mut soma: U,
+        soma_rx: unsync::mpsc::Receiver<Impulse<U::Role, U::Synapse>>,
+    ) -> std::result::Result<(), Error> {
+        #[async]
+        for imp in soma_rx.map_err(|_| Error::from("streams can't fail")) {
+            soma = await!(soma.update(imp)).map_err(|e| e.into())?;
+        }
+
+        Ok(())
+    }
+
+    /// add a soma to the organelle
+    pub fn add_soma<U: Soma + 'static>(&mut self, soma: U) -> Uuid
+    where
+        U::Role: From<T::Role> + Into<T::Role>,
+        U::Synapse: From<T::Synapse> + Into<T::Synapse>,
+    {
+        let (uuid, soma_rx) = self.create_soma_channel::<U::Role, U::Synapse>();
+
+        let main_tx = self.main_tx.clone();
+
+        self.handle
+            .spawn(Self::run_soma(soma, soma_rx).or_else(move |e| {
+                main_tx
+                    .send(Impulse::Error(e.into()))
+                    .map(|_| ())
+                    .map_err(|_| ())
+            }));
 
         uuid
     }
