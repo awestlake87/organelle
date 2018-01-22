@@ -3,164 +3,136 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use futures::prelude::*;
-use futures::unsync::mpsc;
+use futures::unsync;
 use tokio_core::reactor;
 
-use super::{
-    Effector,
-    Error,
-    ErrorKind,
-    Handle,
-    Impulse,
-    Node,
-    Result,
-    SomaWrapper,
-};
+use super::{Error, Result};
 
-/// defines the collection of traits necessary to act as a soma message
-pub trait Signal: 'static {}
+/// trait alias to express requirements of a Role type
+pub trait Role: Debug + Copy + Clone + Hash + PartialEq + Eq {}
 
-impl<T> Signal for T
+impl<T> Role for T
 where
-    T: 'static,
+    T: Debug + Copy + Clone + Hash + PartialEq + Eq,
 {
 }
 
-/// defines the collection of traits necessary to act as a soma role
-pub trait Synapse: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static {}
+/// trait alias to express requirements of a Synapse type
+pub trait Synapse {}
 
-impl<T> Synapse for T
-where
-    T: Debug + Copy + Clone + Hash + Eq + PartialEq + 'static,
-{
+impl<T> Synapse for T {}
+
+/// a group of control signals passed between somas
+pub enum Impulse<R: Role, S: Synapse> {
+    /// add an input synapse with the given role to the soma
+    ///
+    /// you should always expect to handle this impulse if the soma has any
+    /// inputs. if your soma has inputs, it is best to wrap it with an Axon
+    /// which can be used for validation purposes.
+    AddInput(R, S),
+    /// add an output synapse with the given role to the soma
+    ///
+    /// you should always expect to handle this impulse if the soma has any
+    /// outputs. if your soma has outputs, it is best to wrap it with an Axon
+    /// which can be used for validation purposes.
+    AddOutput(R, S),
+    /// notify the soma that it has received all of its inputs and outputs
+    ///
+    /// you should always expect to handle this impulse because it will be
+    /// passed to each soma regardless of configuration
+    Start(unsync::mpsc::Sender<Impulse<R, S>>, reactor::Handle),
+    /// stop the event loop and exit gracefully
+    ///
+    /// you should not expect to handle this impulse at any time, it is handled
+    /// for you by the event loop
+    Stop,
+    /// terminate the event loop with an error
+    ///
+    /// this impulse will automatically be triggered if a soma update resolves
+    /// with an error.
+    ///
+    /// you should not expect to handle this impulse at any time, it is handled
+    /// for you by the event loop
+    Error(Error),
 }
 
-/// defines an interface for a soma of any type
+impl<R, S> Impulse<R, S>
+where
+    R: Role,
+    S: Synapse,
+{
+    /// convert from another type of impulse
+    pub fn convert_from<T, U>(imp: Impulse<T, U>) -> Self
+    where
+        T: Role + Into<R>,
+        U: Synapse + Into<S>,
+    {
+        match imp {
+            Impulse::AddInput(role, synapse) => {
+                Impulse::AddInput(role.into(), synapse.into())
+            },
+            Impulse::AddOutput(role, synapse) => {
+                Impulse::AddOutput(role.into(), synapse.into())
+            },
+            Impulse::Stop => Impulse::Stop,
+            Impulse::Error(e) => Impulse::Error(e),
+
+            Impulse::Start(_, _) => panic!("no automatic conversion for start"),
+        }
+    }
+}
+
+/// a singular cell of functionality that can be ported between organelles
 ///
-/// generic across the user-defined message to be passed between somas and the
-/// user-defined roles for connections
+/// you can think of a soma as a stream of impulses folded over a structure.
+/// somas will perform some type of update upon receiving an impulse, which can
+/// then propagate to other somas. when stitched together inside an organelle,
+/// this can essentially be used to easily solve any asynchronous programming
+/// problem in an efficient, modular, and scalable way.
 pub trait Soma: Sized {
-    /// user-defined message to be passed between somas
-    type Signal: Signal;
-    /// user-defined roles for connections
+    /// the role a synapse plays in a connection between somas.
+    type Role: Role + Into<(Self::Synapse, Self::Synapse)>;
+    /// the glue that binds somas together.
+    ///
+    /// this will (probably) be an enum representing the different types of
+    /// connections that can be made between this soma and others. synapses can
+    /// be used to exchange synchronization primitives such as (but not limited
+    /// to) mpsc and oneshot channels. these can provide custom-tailored methods
+    /// of communication between somas to ease the pain of async programming.
     type Synapse: Synapse;
-    /// error when a soma fails to update
-    type Error: std::error::Error + Send + From<Error> + 'static;
+    /// the types of errors that this soma can return
+    type Error: std::error::Error + Send + Into<Error>;
+    /// the future representing a single update of the soma.
+    type Future: Future<Item = Self, Error = Self::Error>;
 
-    /// apply any changes to the soma's state as a result of _msg
-    fn update(
-        self,
-        _msg: Impulse<Self::Signal, Self::Synapse>,
-    ) -> std::result::Result<Self, Self::Error> {
-        Ok(self)
-    }
+    /// react to a single impulse
+    fn update(self, imp: Impulse<Self::Role, Self::Synapse>) -> Self::Future;
 
-    /// convert the soma into a future that can be run on an event loop
-    fn into_future(
-        self, reactor: reactor::Handle
-    ) -> Box<Future<Item=Result<()>, Error=Error>> where Self: 'static {
-        let (queue_tx, queue_rx) = mpsc::channel(100);
+    /// convert this soma into a future that can be passed to an event loop
+    #[async(boxed)]
+    fn run(mut self, handle: reactor::Handle) -> Result<()>
+    where
+        Self: 'static,
+    {
+        // it's important that tx live through this function
+        let (tx, rx) = unsync::mpsc::channel(1);
 
-        let main_soma = Handle::new_v4();
+        await!(
+            tx.clone()
+                .send(Impulse::Start(tx, handle))
+                .map_err(|_| Error::from("unable to send start signal"))
+        )?;
 
-        let sender = queue_tx.clone();
+        #[async]
+        for imp in rx.map_err(|_| Error::from("streams can't fail")) {
+            match imp {
+                Impulse::Error(e) => bail!(e),
+                Impulse::Stop => break,
 
-        // Rc to keep it alive, RefCell to mutate it in the event loop
-        let mut node = SomaWrapper::new(self);
+                _ => self = await!(self.update(imp)).map_err(|e| e.into())?,
+            }
+        }
 
-        let reactor_copy = reactor.clone();
-
-        reactor.clone().spawn(
-            queue_tx
-                .clone()
-                .send(Impulse::Init(Effector {
-                    this_soma: main_soma,
-                    sender: sender,
-                    reactor: reactor,
-                }))
-                .and_then(|tx| tx.send(Impulse::Start)
-                    .then(|result| match result {
-                        Ok(_) => Ok(()),
-                        Err(e) => panic!("unable to start main soma: {:?}", e),
-                    })
-                )
-                .then(|result| match result {
-                    Ok(_) => Ok(()),
-                    Err(e) => panic!("unable to initialize main soma: {:?}", e),
-                })
-        );
-
-        let (tx, rx) = mpsc::channel::<Error>(1);
-
-        let stream_future = queue_rx
-            .take_while(|msg| match *msg {
-                Impulse::Stop => Ok(false),
-                _ => Ok(true),
-            })
-            .for_each(move |msg| {
-                if let Err(e) = match msg {
-                    Impulse::Init(effector) => {
-                        node.update(Impulse::Init(effector))
-                    },
-                    Impulse::AddInput(input, role) => {
-                        node.update(Impulse::AddInput(input, role))
-                    },
-                    Impulse::AddOutput(output, role) => {
-                        node.update(Impulse::AddOutput(output, role))
-                    },
-
-                    Impulse::Start => node.update(Impulse::Start),
-
-                    Impulse::Payload(src, dest, msg) => {
-                        // messages should only be sent to our main soma
-                        assert_eq!(dest, main_soma);
-
-                        node.update(Impulse::Signal(src, msg))
-                    },
-
-                    Impulse::Err(e) => Err(e),
-
-                    _ => unreachable!(),
-                } {
-                    reactor_copy.spawn(tx.clone()
-                        .send(e)
-                        .then(|result| match result {
-                            Ok(_) => Ok(()),
-                            Err(e) => panic!("unable to send error: {:?}", e),
-                        })
-                    );
-                }
-
-                Ok(())
-            })
-            .then(move |_| {
-                // make sure the channel stays open
-                let _keep_alive = queue_tx;
-                
-                Ok(())
-            });
-
-
-        Box::new(stream_future
-            .map(|_| Ok(()))
-            .select(
-                rx.into_future()
-                    .map(|(item, _)| Err(item.unwrap()))
-                    .map_err(|_| ())
-            )
-            .map(|(result, _)| result)
-            .map_err(|_| -> Error {
-                ErrorKind::Msg("select error".into()).into()
-            })
-        )
-    }
-
-    /// spin up an event loop and run soma
-    fn run(self) -> Result<()> where Self: 'static {
-        let mut core = reactor::Core::new()?;
-
-        let reactor = core.handle();
-
-        core.run(self.into_future(reactor))?
+        Ok(())
     }
 }

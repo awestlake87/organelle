@@ -1,313 +1,241 @@
 use std;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::mem;
 
+use futures::future;
 use futures::prelude::*;
-use futures::unsync::mpsc;
+use futures::unsync;
 use tokio_core::reactor;
+use uuid::Uuid;
 
-use super::{
-    Effector,
-    Handle,
-    Impulse,
-    Node,
-    Result,
-    Signal,
-    Soma,
-    SomaWrapper,
-    Synapse,
-};
+use super::{Error, Impulse, Result, Role, Soma, Synapse};
 
-struct OrganelleNodePool<S: Soma> {
-    main_hdl: Handle,
+/// a soma designed to facilitate connections between other somas
+///
+/// where somas are the single cells of functionality, organelles are the
+/// organisms capable of more complex tasks. however, organelles are still
+/// essentially somas, so they can used in larger organelles as long as they
+/// comply with their standards.
+pub struct Organelle<T: Soma>
+where
+    T: Soma,
+{
+    handle: reactor::Handle,
 
-    main: Box<Node<S::Signal, S::Synapse>>,
+    main: Uuid,
+    main_tx: unsync::mpsc::Sender<Impulse<T::Role, T::Synapse>>,
+    main_rx: Option<unsync::mpsc::Receiver<Impulse<T::Role, T::Synapse>>>,
 
-    misc: HashMap<Handle, Box<Node<S::Signal, S::Synapse>>>,
+    somas: HashMap<Uuid, unsync::mpsc::Sender<Impulse<T::Role, T::Synapse>>>,
 }
 
-/// a special soma designed to contain a network of interconnected somas
-///
-/// the organelle is created with one soma. this soma is the only soma within
-/// the organelle that is allowed to communicate or connect to the outside
-/// world. it acts as an entry point for the network, providing essential
-/// external data while keeping implementation-specific data and somas hidden.
-/// upon receiving an update, it has the opportunity to communicate these
-/// updates with external somas.
-///
-/// the intent is to allow organelles to be hierarchical and potentially contain
-/// any number of nested soma networks. in order to do this, the organelle
-/// isolates a group of messages from the larger whole. this is essential for
-/// extensibility and maintainability.
-///
-/// any organelle can be plugged into any other organelle provided their
-/// messages and dendrites can convert between each other using From and Into
-pub struct Organelle<S: Soma + 'static> {
-    effector: Option<Effector<S::Signal, S::Synapse>>,
+impl<T: Soma + 'static> Organelle<T> {
+    /// create a new organelle
+    pub fn new(main: T, handle: reactor::Handle) -> Self {
+        let (tx, rx) = unsync::mpsc::channel(100);
 
-    main_hdl: Handle,
-    connections: Vec<(Handle, Handle, S::Synapse)>,
+        let mut organelle = Self {
+            handle: handle,
 
-    nodes: Rc<RefCell<OrganelleNodePool<S>>>,
-}
+            main: Uuid::new_v4(),
+            main_tx: tx,
+            main_rx: Some(rx),
 
-impl<S: Soma + 'static> Organelle<S> {
-    /// create a new organelle with input and output somas
-    pub fn new(main: S) -> Self {
-        let main_hdl = Handle::new_v4();
+            somas: HashMap::new(),
+        };
 
-        Self {
-            effector: None,
+        let main = organelle.add_soma(main);
+        organelle.main = main;
 
-            main_hdl: main_hdl,
-            connections: vec![],
-
-            nodes: Rc::from(RefCell::new(OrganelleNodePool {
-                main_hdl: main_hdl,
-
-                main: Box::new(SomaWrapper::new(main)),
-
-                misc: HashMap::new(),
-            })),
-        }
+        organelle
     }
 
-    /// add a new soma to the organelle and initialize it
-    ///
-    /// as long as the soma's message type can convert Into and From the
-    /// organelle's message type, it can be added to the organelle and can
-    /// communicate with any somas that do the same.
-    pub fn add_soma<T>(&mut self, soma: T) -> Handle
+    /// get the main soma's uuid
+    pub fn main(&self) -> Uuid {
+        self.main
+    }
+
+    fn create_soma_channel<R, S>(
+        &mut self,
+    ) -> (Uuid, unsync::mpsc::Receiver<Impulse<R, S>>)
     where
-        T: Soma + 'static,
-
-        S::Signal: From<T::Signal> + Into<T::Signal> + Signal,
-        T::Signal: From<S::Signal> + Into<S::Signal> + Signal,
-
-        S::Synapse: From<T::Synapse> + Into<T::Synapse> + Synapse,
-        T::Synapse: From<S::Synapse> + Into<S::Synapse> + Synapse,
+        R: Role + From<T::Role> + Into<T::Role> + 'static,
+        S: Synapse + From<T::Synapse> + Into<T::Synapse> + 'static,
     {
-        let node = Box::new(SomaWrapper::new(soma));
-        let handle = Handle::new_v4();
+        let uuid = Uuid::new_v4();
 
-        (*self.nodes).borrow_mut().misc.insert(handle, node);
+        let (tx, rx) =
+            unsync::mpsc::channel::<Impulse<T::Role, T::Synapse>>(10);
 
-        handle
+        let (soma_tx, soma_rx) = unsync::mpsc::channel::<Impulse<R, S>>(1);
+
+        self.handle.spawn(rx.for_each(move |imp| {
+            soma_tx
+                .clone()
+                .send(match imp {
+                    Impulse::Start(sender, handle) => {
+                        let (tx, rx) =
+                            unsync::mpsc::channel::<Impulse<R, S>>(1);
+
+                        handle.spawn(rx.for_each(move |imp| {
+                            sender.clone().send(
+                                        Impulse::<
+                                            T::Role,
+                                            T::Synapse,
+                                        >::convert_from(imp)
+                                    ).then(|_| future::ok(()))
+                        }).then(|_| future::ok(())));
+
+                        Impulse::Start(tx, handle)
+                    },
+                    _ => Impulse::<R, S>::convert_from(imp),
+                })
+                .map(|_| ())
+                .map_err(|_| ())
+        }).map_err(|_| ()));
+
+        self.somas.insert(uuid, tx);
+
+        (uuid, soma_rx)
     }
 
-    /// connect input to output and update them accordingly
-    pub fn connect(&mut self, input: Handle, output: Handle, role: S::Synapse) {
-        self.connections.push((input, output, role));
+    #[async]
+    fn run_soma<U: Soma + 'static>(
+        mut soma: U,
+        soma_rx: unsync::mpsc::Receiver<Impulse<U::Role, U::Synapse>>,
+    ) -> std::result::Result<(), Error> {
+        #[async]
+        for imp in soma_rx.map_err(|_| Error::from("streams can't fail")) {
+            soma = await!(soma.update(imp)).map_err(|e| e.into())?;
+        }
+
+        Ok(())
     }
 
-    /// get the main soma's handle
-    pub fn get_main_handle(&self) -> Handle {
-        self.main_hdl
+    /// add a soma to the organelle
+    pub fn add_soma<U: Soma + 'static>(&mut self, soma: U) -> Uuid
+    where
+        U::Role: From<T::Role> + Into<T::Role>,
+        U::Synapse: From<T::Synapse> + Into<T::Synapse>,
+    {
+        let (uuid, soma_rx) = self.create_soma_channel::<U::Role, U::Synapse>();
+
+        let main_tx = self.main_tx.clone();
+
+        self.handle
+            .spawn(Self::run_soma(soma, soma_rx).or_else(move |e| {
+                main_tx
+                    .send(Impulse::Error(e.into()))
+                    .map(|_| ())
+                    .map_err(|_| ())
+            }));
+
+        uuid
     }
 
-    fn update_node(
+    /// connect two somas together using the specified role
+    pub fn connect(
         &self,
-        hdl: Handle,
-        msg: Impulse<S::Signal, S::Synapse>,
+        input: Uuid,
+        output: Uuid,
+        role: T::Role,
     ) -> Result<()> {
-        let mut nodes = (*self.nodes).borrow_mut();
+        let (tx, rx) = role.into();
 
-        if hdl == nodes.main_hdl {
-            nodes.main.update(msg)
+        let input_sender = if let Some(sender) = self.somas.get(&input) {
+            sender.clone()
         } else {
-            nodes.misc.get_mut(&hdl).unwrap().update(msg)
-        }
+            bail!("unable to find input")
+        };
+
+        let output_sender = if let Some(sender) = self.somas.get(&output) {
+            sender.clone()
+        } else {
+            bail!("unable to find output")
+        };
+
+        self.handle.spawn(
+            input_sender
+                .send(Impulse::AddOutput(role, tx))
+                .then(|_| future::ok(())),
+        );
+        self.handle.spawn(
+            output_sender
+                .send(Impulse::AddInput(role, rx))
+                .then(|_| future::ok(())),
+        );
+
+        Ok(())
     }
 
-    fn init<T, U>(mut self, effector: Effector<T, U>) -> Result<Self>
-    where
-        S::Signal: From<T> + Into<T> + Signal,
-        T: From<S::Signal> + Into<S::Signal> + Signal,
-
-        S::Synapse: From<U> + Into<U> + Synapse,
-        U: From<S::Synapse> + Into<S::Synapse> + Synapse,
-    {
-        let organelle_hdl = effector.this_soma;
-
-        let (queue_tx, queue_rx) = mpsc::channel(100);
-
-        self.effector = Some(Effector {
-            this_soma: organelle_hdl.clone(),
-            sender: queue_tx,
-            reactor: effector.reactor,
-        });
-
-        let sender = self.effector.as_ref().unwrap().sender.clone();
-        let reactor = self.effector.as_ref().unwrap().reactor.clone();
-
-        let main_hdl = self.main_hdl;
-
-        self.update_node(
-            main_hdl,
-            Impulse::Init(Effector {
-                this_soma: main_hdl,
-                sender: sender.clone(),
-                reactor: reactor.clone(),
-            }),
-        )?;
-
-        for (hdl, node) in (*self.nodes).borrow_mut().misc.iter_mut() {
-            node.update(Impulse::Init(Effector {
-                this_soma: *hdl,
-                sender: sender.clone(),
-                reactor: reactor.clone(),
-            }))?;
-        }
-
-        for &(input, output, role) in &self.connections {
-            self.update_node(input, Impulse::AddOutput(output, role))?;
-            self.update_node(output, Impulse::AddInput(input, role))?;
-        }
-
-        let external_sender = effector.sender;
-        let nodes = Rc::clone(&self.nodes);
-        let forward_reactor = reactor.clone();
-
-        let stream_future = queue_rx.for_each(move |msg| {
-            Self::forward(
-                organelle_hdl,
-                &mut (*nodes).borrow_mut(),
-                external_sender.clone(),
-                &forward_reactor,
-                msg,
-            ).unwrap();
-
-            Ok(())
-        });
-
-        reactor.spawn(stream_future);
-
-        Ok(self)
-    }
-
-    fn start(self) -> Result<Self> {
-        {
-            let mut nodes = (*self.nodes).borrow_mut();
-
-            nodes.main.update(Impulse::Start)?;
-
-            for node in nodes.misc.values_mut() {
-                node.update(Impulse::Start)?;
-            }
-        }
-
-        Ok(self)
-    }
-
-    fn add_input(self, input: Handle, role: S::Synapse) -> Result<Self> {
-        (*self.nodes)
-            .borrow_mut()
-            .main
-            .update(Impulse::AddInput(input, role))?;
-
-        Ok(self)
-    }
-
-    fn add_output(self, output: Handle, role: S::Synapse) -> Result<Self> {
-        (*self.nodes)
-            .borrow_mut()
-            .main
-            .update(Impulse::AddOutput(output, role))?;
-
-        Ok(self)
-    }
-
-    fn forward<T, U>(
-        organelle: Handle,
-        nodes: &mut OrganelleNodePool<S>,
-        sender: mpsc::Sender<Impulse<T, U>>,
-        reactor: &reactor::Handle,
-        msg: Impulse<S::Signal, S::Synapse>,
-    ) -> Result<()>
-    where
-        S::Signal: From<T> + Into<T> + Signal,
-        T: From<S::Signal> + Into<S::Signal> + Signal,
-
-        S::Synapse: From<U> + Into<U> + Synapse,
-        U: From<S::Synapse> + Into<S::Synapse> + Synapse,
-    {
-        match msg {
-            Impulse::Payload(src, dest, msg) => {
-                let actual_src = {
-                    // check if src is the main soma
-                    if src == nodes.main_hdl {
-                        // if src is the main node, then it becomes tricky.
-                        // these are allowed to send to both internal and
-                        // external somas, so the question becomes whether or
-                        // not to advertise itself as the soma or the organelle
-
-                        if dest == nodes.main_hdl
-                            || nodes.misc.contains_key(&dest)
-                        {
-                            // internal node - use src
-                            src
-                        } else {
-                            // external node - use organelle hdl
-                            organelle
-                        }
-                    } else {
-                        src
-                    }
-                };
-
-                if dest == nodes.main_hdl {
-                    nodes.main.update(Impulse::Signal(actual_src, msg))?;
-                } else if let Some(ref mut node) = nodes.misc.get_mut(&dest) {
-                    // send to internal node
-                    node.update(Impulse::Signal(actual_src, msg))?;
-                } else {
-                    // send to external node
-                    reactor.spawn(
-                        sender
-                            .send(Impulse::<T, U>::convert_protocol(
-                                Impulse::Payload(actual_src, dest, msg),
-                            ))
-                            .then(|_| Ok(())),
-                    );
-                }
-            },
-
-            Impulse::Stop => {
-                reactor.spawn(sender.send(Impulse::Stop).then(|_| Ok(())))
-            },
-            Impulse::Err(e) => {
-                reactor.spawn(sender.send(Impulse::Err(e)).then(|_| Ok(())))
-            },
-
-            _ => unimplemented!(),
+    fn start_all(
+        &self,
+        tx: unsync::mpsc::Sender<Impulse<T::Role, T::Synapse>>,
+        handle: reactor::Handle,
+    ) -> Result<()> {
+        for sender in self.somas.values() {
+            self.handle.spawn(
+                sender
+                    .clone()
+                    .send(Impulse::Start(tx.clone(), handle.clone()))
+                    .then(|_| future::ok(())),
+            );
         }
 
         Ok(())
     }
 }
 
-impl<S: Soma> Soma for Organelle<S> {
-    type Signal = S::Signal;
-    type Synapse = S::Synapse;
-    type Error = S::Error;
+impl<T: Soma + 'static> Soma for Organelle<T> {
+    type Role = T::Role;
+    type Synapse = T::Synapse;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
-    fn update(
-        self, msg: Impulse<S::Signal, S::Synapse>
-    ) -> std::result::Result<Self, Self::Error> {
-        Ok(match msg {
-            Impulse::Init(effector) => self.init(effector)?,
-            Impulse::AddInput(input, role) => self.add_input(input, role)?,
-            Impulse::AddOutput(output, role) => self.add_output(output, role)?,
+    #[async(boxed)]
+    fn update(self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
+        match imp {
+            Impulse::Start(tx, handle) => {
+                self.start_all(tx, handle)?;
 
-            Impulse::Start => self.start()?,
-            Impulse::Signal(src, msg) => {
-                self.update_node(self.main_hdl, Impulse::Signal(src, msg))?;
-
-                self
+                Ok(self)
             },
 
-            _ => unreachable!(),
-        })
+            _ => unimplemented!(),
+        }
+    }
+
+    /// convert this soma into a future that can be passed to an event loop
+    #[async(boxed)]
+    fn run(mut self, handle: reactor::Handle) -> Result<()>
+    where
+        Self: 'static,
+    {
+        // it's important that tx live through this function
+        let (tx, rx) = (
+            self.main_tx.clone(),
+            mem::replace(&mut self.main_rx, None).unwrap(),
+        );
+
+        await!(
+            tx.clone()
+                .send(Impulse::Start(tx, handle))
+                .map_err(|_| Error::from("unable to send start signal"))
+        )?;
+
+        #[async]
+        for imp in rx.map_err(|_| Error::from("streams can't fail")) {
+            match imp {
+                Impulse::Error(e) => bail!(e),
+                Impulse::Stop => break,
+
+                _ => {
+                    self = await!(self.update(imp))
+                        .map_err(|e| -> Error { e.into() })?
+                },
+            }
+        }
+
+        Ok(())
     }
 }
