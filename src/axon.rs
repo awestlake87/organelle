@@ -5,7 +5,7 @@ use futures::prelude::*;
 use super::{Error, ErrorKind, Impulse, Result, Soma};
 
 /// constraints that can be put on axons for validation purposes
-pub enum Dendrite<R> {
+pub enum Constraint<R> {
     /// only accept one synapse for the given role
     One(R),
     /// accept any number of synapses for the given role
@@ -21,38 +21,38 @@ enum Requirement {
 /// wrap a soma with a set of requirements that will be validated upon startup
 pub struct Axon<T: Soma + 'static> {
     soma: T,
-    inputs: HashMap<T::Role, (Dendrite<T::Role>, Requirement)>,
-    outputs: HashMap<T::Role, (Dendrite<T::Role>, Requirement)>,
+    inputs: HashMap<T::Role, (Constraint<T::Role>, Requirement)>,
+    outputs: HashMap<T::Role, (Constraint<T::Role>, Requirement)>,
 }
 
 impl<T: Soma + 'static> Axon<T> {
     /// wrap a soma with constraints specified by input and output dendrites
     pub fn new(
         soma: T,
-        inputs: Vec<Dendrite<T::Role>>,
-        outputs: Vec<Dendrite<T::Role>>,
+        inputs: Vec<Constraint<T::Role>>,
+        outputs: Vec<Constraint<T::Role>>,
     ) -> Self {
         Self {
             soma: soma,
             inputs: inputs
                 .iter()
                 .map(|d| match d {
-                    &Dendrite::One(r) => {
-                        (r, (Dendrite::One(r), Requirement::Unmet))
+                    &Constraint::One(r) => {
+                        (r, (Constraint::One(r), Requirement::Unmet))
                     },
-                    &Dendrite::Variadic(r) => {
-                        (r, (Dendrite::Variadic(r), Requirement::Met))
+                    &Constraint::Variadic(r) => {
+                        (r, (Constraint::Variadic(r), Requirement::Met))
                     },
                 })
                 .collect(),
             outputs: outputs
                 .iter()
                 .map(|d| match d {
-                    &Dendrite::One(r) => {
-                        (r, (Dendrite::One(r), Requirement::Unmet))
+                    &Constraint::One(r) => {
+                        (r, (Constraint::One(r), Requirement::Unmet))
                     },
-                    &Dendrite::Variadic(r) => {
-                        (r, (Dendrite::Variadic(r), Requirement::Met))
+                    &Constraint::Variadic(r) => {
+                        (r, (Constraint::Variadic(r), Requirement::Met))
                     },
                 })
                 .collect(),
@@ -64,13 +64,13 @@ impl<T: Soma + 'static> Axon<T> {
             self.inputs.get_mut(&role)
         {
             match dendrite {
-                &mut Dendrite::One(_) => match req {
+                &mut Constraint::One(_) => match req {
                     &mut Requirement::Unmet => *req = Requirement::Met,
                     &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
                         format!("expected only one input for {:?}", role)
                     )),
                 },
-                &mut Dendrite::Variadic(_) => (),
+                &mut Constraint::Variadic(_) => (),
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
@@ -87,13 +87,13 @@ impl<T: Soma + 'static> Axon<T> {
             self.outputs.get_mut(&role)
         {
             match dendrite {
-                &mut Dendrite::One(_) => match req {
+                &mut Constraint::One(_) => match req {
                     &mut Requirement::Unmet => *req = Requirement::Met,
                     &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
                         format!("expected only one output for {:?}", role)
                     )),
                 },
-                &mut Dendrite::Variadic(_) => (),
+                &mut Constraint::Variadic(_) => (),
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
@@ -108,25 +108,25 @@ impl<T: Soma + 'static> Axon<T> {
     fn start(&self) -> Result<()> {
         for (role, &(ref dendrite, ref req)) in &self.inputs {
             match dendrite {
-                &Dendrite::One(_) => match req {
+                &Constraint::One(_) => match req {
                     &Requirement::Met => (),
                     &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
                         format!("expected input synapse for {:?}", *role)
                     )),
                 },
-                &Dendrite::Variadic(_) => assert_eq!(*req, Requirement::Met),
+                &Constraint::Variadic(_) => assert_eq!(*req, Requirement::Met),
             }
         }
 
         for (role, &(ref dendrite, ref req)) in &self.outputs {
             match dendrite {
-                &Dendrite::One(_) => match req {
+                &Constraint::One(_) => match req {
                     &Requirement::Met => (),
                     &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
                         format!("expected output synapse for {:?}", *role)
                     )),
                 },
-                &Dendrite::Variadic(_) => assert_eq!(*req, Requirement::Met),
+                &Constraint::Variadic(_) => assert_eq!(*req, Requirement::Met),
             }
         }
 
@@ -136,20 +136,19 @@ impl<T: Soma + 'static> Axon<T> {
 
 impl<T: Soma + 'static> Soma for Axon<T> {
     type Role = T::Role;
-    type Synapse = T::Synapse;
     type Error = Error;
     type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(mut self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
+    fn update(mut self, imp: Impulse<T::Role>) -> Result<Self> {
         Ok(Self {
             soma: match imp {
-                Impulse::AddInput(role, _) => {
+                Impulse::AddDendrite(role, _) => {
                     self.add_input(role)?;
 
                     await!(self.soma.update(imp)).map_err(|e| e.into())?
                 },
-                Impulse::AddOutput(role, _) => {
+                Impulse::AddTerminal(role, _) => {
                     self.add_output(role)?;
 
                     await!(self.soma.update(imp)).map_err(|e| e.into())?
