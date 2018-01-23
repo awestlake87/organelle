@@ -8,7 +8,7 @@ use futures::unsync;
 use tokio_core::reactor;
 use uuid::Uuid;
 
-use super::{Error, Impulse, Result, Role, Soma};
+use super::{Error, Impulse, Result, Soma, Synapse};
 
 /// a soma designed to facilitate connections between other somas
 ///
@@ -23,10 +23,10 @@ where
     handle: reactor::Handle,
 
     main: Uuid,
-    main_tx: unsync::mpsc::Sender<Impulse<T::Role>>,
-    main_rx: Option<unsync::mpsc::Receiver<Impulse<T::Role>>>,
+    main_tx: unsync::mpsc::Sender<Impulse<T::Synapse>>,
+    main_rx: Option<unsync::mpsc::Receiver<Impulse<T::Synapse>>>,
 
-    somas: HashMap<Uuid, unsync::mpsc::Sender<Impulse<T::Role>>>,
+    somas: HashMap<Uuid, unsync::mpsc::Sender<Impulse<T::Synapse>>>,
 }
 
 impl<T: Soma + 'static> Organelle<T> {
@@ -59,17 +59,17 @@ impl<T: Soma + 'static> Organelle<T> {
         &mut self,
     ) -> (Uuid, unsync::mpsc::Receiver<Impulse<R>>)
     where
-        R: Role + From<T::Role> + Into<T::Role> + 'static,
-        R::Dendrite: From<<T::Role as Role>::Dendrite>
-            + Into<<T::Role as Role>::Dendrite>
+        R: Synapse + From<T::Synapse> + Into<T::Synapse> + 'static,
+        R::Dendrite: From<<T::Synapse as Synapse>::Dendrite>
+            + Into<<T::Synapse as Synapse>::Dendrite>
             + 'static,
-        R::Terminal: From<<T::Role as Role>::Terminal>
-            + Into<<T::Role as Role>::Terminal>
+        R::Terminal: From<<T::Synapse as Synapse>::Terminal>
+            + Into<<T::Synapse as Synapse>::Terminal>
             + 'static,
     {
         let uuid = Uuid::new_v4();
 
-        let (tx, rx) = unsync::mpsc::channel::<Impulse<T::Role>>(10);
+        let (tx, rx) = unsync::mpsc::channel::<Impulse<T::Synapse>>(10);
 
         let (soma_tx, soma_rx) = unsync::mpsc::channel::<Impulse<R>>(1);
 
@@ -83,7 +83,7 @@ impl<T: Soma + 'static> Organelle<T> {
                         handle.spawn(rx.for_each(move |imp| {
                             sender
                                 .clone()
-                                .send(Impulse::<T::Role>::convert_from(imp))
+                                .send(Impulse::<T::Synapse>::convert_from(imp))
                                 .then(|_| future::ok(()))
                         }).then(|_| future::ok(())));
 
@@ -103,7 +103,7 @@ impl<T: Soma + 'static> Organelle<T> {
     #[async]
     fn run_soma<U: Soma + 'static>(
         mut soma: U,
-        soma_rx: unsync::mpsc::Receiver<Impulse<U::Role>>,
+        soma_rx: unsync::mpsc::Receiver<Impulse<U::Synapse>>,
     ) -> std::result::Result<(), Error> {
         #[async]
         for imp in soma_rx.map_err(|_| Error::from("streams can't fail")) {
@@ -116,13 +116,13 @@ impl<T: Soma + 'static> Organelle<T> {
     /// add a soma to the organelle
     pub fn add_soma<U: Soma + 'static>(&mut self, soma: U) -> Uuid
     where
-        U::Role: From<T::Role> + Into<T::Role>,
-        <U::Role as Role>::Dendrite: From<<T::Role as Role>::Dendrite>
-            + Into<<T::Role as Role>::Dendrite>,
-        <U::Role as Role>::Terminal: From<<T::Role as Role>::Terminal>
-            + Into<<T::Role as Role>::Terminal>,
+        U::Synapse: From<T::Synapse> + Into<T::Synapse>,
+        <U::Synapse as Synapse>::Dendrite: From<<T::Synapse as Synapse>::Dendrite>
+            + Into<<T::Synapse as Synapse>::Dendrite>,
+        <U::Synapse as Synapse>::Terminal: From<<T::Synapse as Synapse>::Terminal>
+            + Into<<T::Synapse as Synapse>::Terminal>,
     {
-        let (uuid, soma_rx) = self.create_soma_channel::<U::Role>();
+        let (uuid, soma_rx) = self.create_soma_channel::<U::Synapse>();
 
         let main_tx = self.main_tx.clone();
 
@@ -137,35 +137,35 @@ impl<T: Soma + 'static> Organelle<T> {
         uuid
     }
 
-    /// connect two somas together using the specified role
+    /// connect two somas together using the specified synapse
     pub fn connect(
         &self,
-        input: Uuid,
-        output: Uuid,
-        role: T::Role,
+        dendrite: Uuid,
+        terminal: Uuid,
+        synapse: T::Synapse,
     ) -> Result<()> {
-        let (tx, rx) = role.synapse();
+        let (tx, rx) = synapse.synapse();
 
-        let input_sender = if let Some(sender) = self.somas.get(&input) {
+        let dendrite_sender = if let Some(sender) = self.somas.get(&dendrite) {
             sender.clone()
         } else {
-            bail!("unable to find input")
+            bail!("unable to find dendrite")
         };
 
-        let output_sender = if let Some(sender) = self.somas.get(&output) {
+        let terminal_sender = if let Some(sender) = self.somas.get(&terminal) {
             sender.clone()
         } else {
-            bail!("unable to find output")
+            bail!("unable to find terminal")
         };
 
         self.handle.spawn(
-            input_sender
-                .send(Impulse::AddTerminal(role, tx))
+            dendrite_sender
+                .send(Impulse::AddTerminal(synapse, tx))
                 .then(|_| future::ok(())),
         );
         self.handle.spawn(
-            output_sender
-                .send(Impulse::AddDendrite(role, rx))
+            terminal_sender
+                .send(Impulse::AddDendrite(synapse, rx))
                 .then(|_| future::ok(())),
         );
 
@@ -174,7 +174,7 @@ impl<T: Soma + 'static> Organelle<T> {
 
     fn start_all(
         &self,
-        tx: unsync::mpsc::Sender<Impulse<T::Role>>,
+        tx: unsync::mpsc::Sender<Impulse<T::Synapse>>,
         handle: reactor::Handle,
     ) -> Result<()> {
         for sender in self.somas.values() {
@@ -191,12 +191,12 @@ impl<T: Soma + 'static> Organelle<T> {
 }
 
 impl<T: Soma + 'static> Soma for Organelle<T> {
-    type Role = T::Role;
+    type Synapse = T::Synapse;
     type Error = Error;
     type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<T::Role>) -> Result<Self> {
+    fn update(self, imp: Impulse<T::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddDendrite(_, _) | Impulse::AddTerminal(_, _) => {
                 await!(

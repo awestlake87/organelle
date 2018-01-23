@@ -17,7 +17,7 @@ mod soma;
 
 pub use axon::{Axon, Constraint};
 pub use organelle::Organelle;
-pub use soma::{Impulse, Role, Soma};
+pub use soma::{Impulse, Soma, Synapse};
 /// organelle error
 error_chain! {
     foreign_links {

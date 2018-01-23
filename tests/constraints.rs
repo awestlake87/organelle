@@ -13,7 +13,7 @@ use organelle::*;
 use tokio_core::reactor;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-enum Role {
+enum Synapse {
     GiveSomething,
 }
 
@@ -27,13 +27,13 @@ enum Dendrite {
     Taker(unsync::mpsc::Receiver<()>),
 }
 
-impl organelle::Role for Role {
+impl organelle::Synapse for Synapse {
     type Terminal = Terminal;
     type Dendrite = Dendrite;
 
     fn synapse(self) -> (Self::Terminal, Self::Dendrite) {
         match self {
-            Role::GiveSomething => {
+            Synapse::GiveSomething => {
                 let (tx, rx) = unsync::mpsc::channel(1);
 
                 (Terminal::Giver(tx), Dendrite::Taker(rx))
@@ -51,22 +51,23 @@ impl GiverSoma {
         Axon::new(
             GiverSoma { tx: None },
             vec![],
-            vec![Constraint::One(Role::GiveSomething)],
+            vec![Constraint::One(Synapse::GiveSomething)],
         )
     }
 }
 
 impl Soma for GiverSoma {
-    type Role = Role;
+    type Synapse = Synapse;
     type Error = Error;
     type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<Self::Role>) -> Result<Self> {
+    fn update(self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddTerminal(Role::GiveSomething, Terminal::Giver(tx)) => {
-                Ok(Self { tx: Some(tx) })
-            },
+            Impulse::AddTerminal(
+                Synapse::GiveSomething,
+                Terminal::Giver(tx),
+            ) => Ok(Self { tx: Some(tx) }),
             Impulse::Start(_, _) => {
                 await!(
                     self.tx
@@ -90,23 +91,24 @@ impl TakerSoma {
     fn axon() -> Axon<Self> {
         Axon::new(
             TakerSoma { rx: None },
-            vec![Constraint::One(Role::GiveSomething)],
+            vec![Constraint::One(Synapse::GiveSomething)],
             vec![],
         )
     }
 }
 
 impl Soma for TakerSoma {
-    type Role = Role;
+    type Synapse = Synapse;
     type Error = Error;
     type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(self, imp: Impulse<Self::Role>) -> Result<Self> {
+    fn update(self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddDendrite(Role::GiveSomething, Dendrite::Taker(rx)) => {
-                Ok(Self { rx: Some(rx) })
-            },
+            Impulse::AddDendrite(
+                Synapse::GiveSomething,
+                Dendrite::Taker(rx),
+            ) => Ok(Self { rx: Some(rx) }),
             Impulse::Start(tx, _) => {
                 await!(
                     self.rx
@@ -136,7 +138,7 @@ fn test_invalid_input() {
     let giver2 = organelle.add_soma(GiverSoma::axon());
 
     organelle
-        .connect(giver1, giver2, Role::GiveSomething)
+        .connect(giver1, giver2, Synapse::GiveSomething)
         .unwrap();
 
     if let Err(e) = core.run(organelle.run(handle)) {
@@ -164,7 +166,7 @@ fn test_require_one() {
         let taker = organelle.add_soma(TakerSoma::axon());
 
         organelle
-            .connect(giver, taker, Role::GiveSomething)
+            .connect(giver, taker, Synapse::GiveSomething)
             .unwrap();
 
         core.run(organelle.run(handle.clone())).unwrap();

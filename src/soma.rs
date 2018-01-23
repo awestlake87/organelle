@@ -8,16 +8,19 @@ use tokio_core::reactor;
 
 use super::{Error, Result};
 
-/// trait alias to express requirements of a Role type
-pub trait Role: Debug + Copy + Clone + Hash + PartialEq + Eq {
+/// trait alias to express requirements of a Synapse type
+pub trait Synapse: Debug + Copy + Clone + Hash + PartialEq + Eq {
+    /// terminals are the senders or outputs in a connection between somas
     type Terminal: Debug;
+    /// dendrites are the receivers or inputs in a connection between somas
     type Dendrite: Debug;
 
+    /// form a synapse for this synapse into a terminal and dendrite
     fn synapse(self) -> (Self::Terminal, Self::Dendrite);
 }
 
 /// a group of control signals passed between somas
-pub enum Impulse<R: Role> {
+pub enum Impulse<R: Synapse> {
     /// add a dendrite for input to the soma
     ///
     /// you should always expect to handle this impulse if the soma has any
@@ -52,21 +55,21 @@ pub enum Impulse<R: Role> {
 
 impl<R> Impulse<R>
 where
-    R: Role,
+    R: Synapse,
 {
     /// convert from another type of impulse
     pub fn convert_from<T>(imp: Impulse<T>) -> Self
     where
-        T: Role + Into<R>,
+        T: Synapse + Into<R>,
         T::Dendrite: Into<R::Dendrite>,
         T::Terminal: Into<R::Terminal>,
     {
         match imp {
-            Impulse::AddDendrite(role, dendrite) => {
-                Impulse::AddDendrite(role.into(), dendrite.into())
+            Impulse::AddDendrite(synapse, dendrite) => {
+                Impulse::AddDendrite(synapse.into(), dendrite.into())
             },
-            Impulse::AddTerminal(role, terminal) => {
-                Impulse::AddTerminal(role.into(), terminal.into())
+            Impulse::AddTerminal(synapse, terminal) => {
+                Impulse::AddTerminal(synapse.into(), terminal.into())
             },
             Impulse::Stop => Impulse::Stop,
             Impulse::Error(e) => Impulse::Error(e),
@@ -84,15 +87,15 @@ where
 /// this can essentially be used to easily solve any asynchronous programming
 /// problem in an efficient, modular, and scalable way.
 pub trait Soma: Sized {
-    /// the role a synapse plays in a connection between somas.
-    type Role: Role;
+    /// the synapse a synapse plays in a connection between somas.
+    type Synapse: Synapse;
     /// the types of errors that this soma can return
     type Error: std::error::Error + Send + Into<Error>;
     /// the future representing a single update of the soma.
     type Future: Future<Item = Self, Error = Self::Error>;
 
     /// react to a single impulse
-    fn update(self, imp: Impulse<Self::Role>) -> Self::Future;
+    fn update(self, imp: Impulse<Self::Synapse>) -> Self::Future;
 
     /// convert this soma into a future that can be passed to an event loop
     #[async(boxed)]
