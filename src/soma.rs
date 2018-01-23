@@ -11,9 +11,9 @@ use super::{Error, Result};
 /// trait alias to express requirements of a Synapse type
 pub trait Synapse: Debug + Copy + Clone + Hash + PartialEq + Eq {
     /// terminals are the senders or outputs in a connection between somas
-    type Terminal: Debug;
+    type Terminal;
     /// dendrites are the receivers or inputs in a connection between somas
-    type Dendrite: Debug;
+    type Dendrite;
 
     /// form a synapse for this synapse into a terminal and dendrite
     fn synapse(self) -> (Self::Terminal, Self::Dendrite);
