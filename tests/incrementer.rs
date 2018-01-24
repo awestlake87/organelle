@@ -172,7 +172,6 @@ impl Incrementer {
 impl Soma for Incrementer {
     type Synapse = IncrementerSynapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
@@ -221,7 +220,6 @@ impl Counter {
 impl Soma for Counter {
     type Synapse = CounterSynapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {

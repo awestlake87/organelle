@@ -138,7 +138,6 @@ impl<T: Soma + 'static> Axon<T> {
 impl<T: Soma + 'static> Soma for Axon<T> {
     type Synapse = T::Synapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(mut self, imp: Impulse<T::Synapse>) -> Result<Self> {

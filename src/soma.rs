@@ -91,11 +91,12 @@ pub trait Soma: Sized {
     type Synapse: Synapse;
     /// the types of errors that this soma can return
     type Error: std::error::Error + Send + Into<Error>;
-    /// the future representing a single update of the soma.
-    type Future: Future<Item = Self, Error = Self::Error>;
 
     /// react to a single impulse
-    fn update(self, imp: Impulse<Self::Synapse>) -> Self::Future;
+    fn update(
+        self,
+        imp: Impulse<Self::Synapse>,
+    ) -> Box<Future<Item = Self, Error = Self::Error>>;
 
     /// convert this soma into a future that can be passed to an event loop
     #[async(boxed)]

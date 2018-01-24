@@ -59,7 +59,6 @@ impl GiverSoma {
 impl Soma for GiverSoma {
     type Synapse = Synapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(self, imp: Impulse<Self::Synapse>) -> Result<Self> {
@@ -100,7 +99,6 @@ impl TakerSoma {
 impl Soma for TakerSoma {
     type Synapse = Synapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
     fn update(self, imp: Impulse<Self::Synapse>) -> Result<Self> {
