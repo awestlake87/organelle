@@ -114,7 +114,7 @@ pub trait Soma: Sized {
         )?;
 
         #[async]
-        for imp in rx.map_err(|_| Error::from("streams can't fail")) {
+        for imp in rx.map_err(|_| -> Error { unreachable!() }) {
             match imp {
                 Impulse::Error(e) => bail!(e),
                 Impulse::Stop => break,
