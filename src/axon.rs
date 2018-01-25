@@ -5,10 +5,10 @@ use futures::prelude::*;
 use super::{Error, ErrorKind, Impulse, Result, Soma};
 
 /// constraints that can be put on axons for validation purposes
-pub enum Dendrite<R> {
-    /// only accept one synapse for the given role
+pub enum Constraint<R> {
+    /// only accept one synapse
     One(R),
-    /// accept any number of synapses for the given role
+    /// accept any number of synapses
     Variadic(R),
 }
 
@@ -21,84 +21,85 @@ enum Requirement {
 /// wrap a soma with a set of requirements that will be validated upon startup
 pub struct Axon<T: Soma + 'static> {
     soma: T,
-    inputs: HashMap<T::Role, (Dendrite<T::Role>, Requirement)>,
-    outputs: HashMap<T::Role, (Dendrite<T::Role>, Requirement)>,
+    dendrites: HashMap<T::Synapse, (Constraint<T::Synapse>, Requirement)>,
+    terminals: HashMap<T::Synapse, (Constraint<T::Synapse>, Requirement)>,
 }
 
 impl<T: Soma + 'static> Axon<T> {
-    /// wrap a soma with constraints specified by input and output dendrites
+    /// wrap a soma with constraints specified by dendrite and terminal
+    /// constraints
     pub fn new(
         soma: T,
-        inputs: Vec<Dendrite<T::Role>>,
-        outputs: Vec<Dendrite<T::Role>>,
+        dendrites: Vec<Constraint<T::Synapse>>,
+        terminals: Vec<Constraint<T::Synapse>>,
     ) -> Self {
         Self {
             soma: soma,
-            inputs: inputs
+            dendrites: dendrites
                 .iter()
                 .map(|d| match d {
-                    &Dendrite::One(r) => {
-                        (r, (Dendrite::One(r), Requirement::Unmet))
+                    &Constraint::One(r) => {
+                        (r, (Constraint::One(r), Requirement::Unmet))
                     },
-                    &Dendrite::Variadic(r) => {
-                        (r, (Dendrite::Variadic(r), Requirement::Met))
+                    &Constraint::Variadic(r) => {
+                        (r, (Constraint::Variadic(r), Requirement::Met))
                     },
                 })
                 .collect(),
-            outputs: outputs
+            terminals: terminals
                 .iter()
                 .map(|d| match d {
-                    &Dendrite::One(r) => {
-                        (r, (Dendrite::One(r), Requirement::Unmet))
+                    &Constraint::One(r) => {
+                        (r, (Constraint::One(r), Requirement::Unmet))
                     },
-                    &Dendrite::Variadic(r) => {
-                        (r, (Dendrite::Variadic(r), Requirement::Met))
+                    &Constraint::Variadic(r) => {
+                        (r, (Constraint::Variadic(r), Requirement::Met))
                     },
                 })
                 .collect(),
         }
     }
 
-    fn add_input(&mut self, role: T::Role) -> Result<()> {
-        if let Some(&mut (ref mut dendrite, ref mut req)) =
-            self.inputs.get_mut(&role)
+    fn add_dendrite(&mut self, synapse: T::Synapse) -> Result<()> {
+        if let Some(&mut (ref mut constraint, ref mut req)) =
+            self.dendrites.get_mut(&synapse)
         {
-            match dendrite {
-                &mut Dendrite::One(_) => match req {
+            match constraint {
+                &mut Constraint::One(_) => match req {
                     &mut Requirement::Unmet => *req = Requirement::Met,
                     &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
-                        format!("expected only one input for {:?}", role)
+                        format!("expected only one dendrite for {:?}", synapse)
                     )),
                 },
-                &mut Dendrite::Variadic(_) => (),
+                &mut Constraint::Variadic(_) => (),
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
-                "no dendrites found for {:?}",
-                role
+                "no constraints found for {:?}",
+                synapse
             )))
         }
 
         Ok(())
     }
 
-    fn add_output(&mut self, role: T::Role) -> Result<()> {
-        if let Some(&mut (ref mut dendrite, ref mut req)) =
-            self.outputs.get_mut(&role)
+    fn add_terminal(&mut self, synapse: T::Synapse) -> Result<()> {
+        if let Some(&mut (ref mut constraint, ref mut req)) =
+            self.terminals.get_mut(&synapse)
         {
-            match dendrite {
-                &mut Dendrite::One(_) => match req {
+            match constraint {
+                &mut Constraint::One(_) => match req {
                     &mut Requirement::Unmet => *req = Requirement::Met,
                     &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
-                        format!("expected only one output for {:?}", role)
+                        format!("expected only one terminal for {:?}", synapse)
                     )),
                 },
-                &mut Dendrite::Variadic(_) => (),
+                &mut Constraint::Variadic(_) => (),
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
-                "no dendrites found for {:?}",
-                role
+                "no constraints found for {:?}",
+                synapse
             )))
         }
 
@@ -106,27 +107,27 @@ impl<T: Soma + 'static> Axon<T> {
     }
 
     fn start(&self) -> Result<()> {
-        for (role, &(ref dendrite, ref req)) in &self.inputs {
-            match dendrite {
-                &Dendrite::One(_) => match req {
+        for (synapse, &(ref constraint, ref req)) in &self.dendrites {
+            match constraint {
+                &Constraint::One(_) => match req {
                     &Requirement::Met => (),
                     &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
-                        format!("expected input synapse for {:?}", *role)
+                        format!("expected dendrite synapse for {:?}", *synapse)
                     )),
                 },
-                &Dendrite::Variadic(_) => assert_eq!(*req, Requirement::Met),
+                &Constraint::Variadic(_) => assert_eq!(*req, Requirement::Met),
             }
         }
 
-        for (role, &(ref dendrite, ref req)) in &self.outputs {
-            match dendrite {
-                &Dendrite::One(_) => match req {
+        for (synapse, &(ref constraint, ref req)) in &self.terminals {
+            match constraint {
+                &Constraint::One(_) => match req {
                     &Requirement::Met => (),
                     &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
-                        format!("expected output synapse for {:?}", *role)
+                        format!("expected terminal synapse for {:?}", *synapse)
                     )),
                 },
-                &Dendrite::Variadic(_) => assert_eq!(*req, Requirement::Met),
+                &Constraint::Variadic(_) => assert_eq!(*req, Requirement::Met),
             }
         }
 
@@ -135,22 +136,20 @@ impl<T: Soma + 'static> Axon<T> {
 }
 
 impl<T: Soma + 'static> Soma for Axon<T> {
-    type Role = T::Role;
     type Synapse = T::Synapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(mut self, imp: Impulse<T::Role, T::Synapse>) -> Result<Self> {
+    fn update(mut self, imp: Impulse<T::Synapse>) -> Result<Self> {
         Ok(Self {
             soma: match imp {
-                Impulse::AddInput(role, _) => {
-                    self.add_input(role)?;
+                Impulse::AddDendrite(synapse, _) => {
+                    self.add_dendrite(synapse)?;
 
                     await!(self.soma.update(imp)).map_err(|e| e.into())?
                 },
-                Impulse::AddOutput(role, _) => {
-                    self.add_output(role)?;
+                Impulse::AddTerminal(synapse, _) => {
+                    self.add_terminal(synapse)?;
 
                     await!(self.soma.update(imp)).map_err(|e| e.into())?
                 },
@@ -165,8 +164,8 @@ impl<T: Soma + 'static> Soma for Axon<T> {
                 },
                 //_ => await!(self.soma.update(imp))?,
             },
-            inputs: self.inputs,
-            outputs: self.outputs,
+            dendrites: self.dendrites,
+            terminals: self.terminals,
         })
     }
 }

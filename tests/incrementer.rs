@@ -19,79 +19,116 @@ use tokio_core::reactor;
 use tokio_timer::Timer;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-enum CounterRole {
-    Incrementer,
-}
-
 enum CounterSynapse {
-    Feed(unsync::mpsc::Sender<()>),
-    Input(unsync::mpsc::Receiver<()>),
+    Increment,
 }
 
-impl From<CounterRole> for (CounterSynapse, CounterSynapse) {
-    fn from(role: CounterRole) -> Self {
-        match role {
-            CounterRole::Incrementer => {
+#[derive(Debug)]
+enum CounterTerminal {
+    Incrementer(unsync::mpsc::Sender<()>),
+}
+
+#[derive(Debug)]
+enum CounterDendrite {
+    Counter(unsync::mpsc::Receiver<()>),
+}
+
+impl Synapse for CounterSynapse {
+    type Terminal = CounterTerminal;
+    type Dendrite = CounterDendrite;
+
+    fn synapse(self) -> (Self::Terminal, Self::Dendrite) {
+        match self {
+            CounterSynapse::Increment => {
                 let (tx, rx) = unsync::mpsc::channel(10);
 
-                (CounterSynapse::Feed(tx), CounterSynapse::Input(rx))
+                (
+                    CounterTerminal::Incrementer(tx),
+                    CounterDendrite::Counter(rx),
+                )
             },
         }
     }
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-enum IncrementerRole {
-    Counter,
-}
-
 enum IncrementerSynapse {
-    Output(unsync::mpsc::Sender<()>),
-    Feed(unsync::mpsc::Receiver<()>),
+    Increment,
 }
 
-impl From<IncrementerRole> for (IncrementerSynapse, IncrementerSynapse) {
-    fn from(role: IncrementerRole) -> Self {
-        match role {
-            IncrementerRole::Counter => {
+#[derive(Debug)]
+enum IncrementerTerminal {
+    Incrementer(unsync::mpsc::Sender<()>),
+}
+
+#[derive(Debug)]
+enum IncrementerDendrite {
+    Counter(unsync::mpsc::Receiver<()>),
+}
+
+impl Synapse for IncrementerSynapse {
+    type Terminal = IncrementerTerminal;
+    type Dendrite = IncrementerDendrite;
+
+    fn synapse(self) -> (Self::Terminal, Self::Dendrite) {
+        match self {
+            IncrementerSynapse::Increment => {
                 let (tx, rx) = unsync::mpsc::channel(10);
 
-                (IncrementerSynapse::Output(tx), IncrementerSynapse::Feed(rx))
+                (
+                    IncrementerTerminal::Incrementer(tx),
+                    IncrementerDendrite::Counter(rx),
+                )
             },
         }
     }
 }
 
-impl From<IncrementerRole> for CounterRole {
-    fn from(role: IncrementerRole) -> Self {
-        match role {
-            IncrementerRole::Counter => CounterRole::Incrementer,
-        }
-    }
-}
-
-impl From<CounterRole> for IncrementerRole {
-    fn from(role: CounterRole) -> Self {
-        match role {
-            CounterRole::Incrementer => IncrementerRole::Counter,
-        }
-    }
-}
-
 impl From<IncrementerSynapse> for CounterSynapse {
-    fn from(role: IncrementerSynapse) -> Self {
-        match role {
-            IncrementerSynapse::Output(tx) => CounterSynapse::Feed(tx),
-            IncrementerSynapse::Feed(rx) => CounterSynapse::Input(rx),
+    fn from(synapse: IncrementerSynapse) -> Self {
+        match synapse {
+            IncrementerSynapse::Increment => CounterSynapse::Increment,
+        }
+    }
+}
+impl From<CounterSynapse> for IncrementerSynapse {
+    fn from(synapse: CounterSynapse) -> Self {
+        match synapse {
+            CounterSynapse::Increment => IncrementerSynapse::Increment,
         }
     }
 }
 
-impl From<CounterSynapse> for IncrementerSynapse {
-    fn from(role: CounterSynapse) -> Self {
-        match role {
-            CounterSynapse::Feed(tx) => IncrementerSynapse::Output(tx),
-            CounterSynapse::Input(rx) => IncrementerSynapse::Feed(rx),
+impl From<IncrementerTerminal> for CounterTerminal {
+    fn from(synapse: IncrementerTerminal) -> Self {
+        match synapse {
+            IncrementerTerminal::Incrementer(tx) => {
+                CounterTerminal::Incrementer(tx)
+            },
+        }
+    }
+}
+impl From<CounterTerminal> for IncrementerTerminal {
+    fn from(synapse: CounterTerminal) -> Self {
+        match synapse {
+            CounterTerminal::Incrementer(tx) => {
+                IncrementerTerminal::Incrementer(tx)
+            },
+        }
+    }
+}
+
+impl From<IncrementerDendrite> for CounterDendrite {
+    fn from(synapse: IncrementerDendrite) -> Self {
+        match synapse {
+            IncrementerDendrite::Counter(rx) => CounterDendrite::Counter(rx),
+        }
+    }
+}
+impl From<CounterDendrite> for IncrementerDendrite {
+    fn from(synapse: CounterDendrite) -> Self {
+        match synapse {
+            CounterDendrite::Counter(rx) => IncrementerDendrite::Counter(rx),
         }
     }
 }
@@ -109,7 +146,7 @@ impl Incrementer {
                 tx: None,
             },
             vec![],
-            vec![Dendrite::One(IncrementerRole::Counter)],
+            vec![Constraint::One(IncrementerSynapse::Increment)],
         )
     }
 
@@ -133,20 +170,15 @@ impl Incrementer {
 }
 
 impl Soma for Incrementer {
-    type Role = IncrementerRole;
     type Synapse = IncrementerSynapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(
-        mut self,
-        imp: Impulse<Self::Role, Self::Synapse>,
-    ) -> Result<Self> {
+    fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddOutput(
-                IncrementerRole::Counter,
-                IncrementerSynapse::Output(tx),
+            Impulse::AddTerminal(
+                IncrementerSynapse::Increment,
+                IncrementerTerminal::Incrementer(tx),
             ) => {
                 println!("incrementer got output");
 
@@ -179,27 +211,22 @@ impl Counter {
     fn axon() -> Axon<Self> {
         Axon::new(
             Self { rx: None },
-            vec![Dendrite::One(CounterRole::Incrementer)],
+            vec![Constraint::One(CounterSynapse::Increment)],
             vec![],
         )
     }
 }
 
 impl Soma for Counter {
-    type Role = CounterRole;
     type Synapse = CounterSynapse;
     type Error = Error;
-    type Future = Box<Future<Item = Self, Error = Self::Error>>;
 
     #[async(boxed)]
-    fn update(
-        mut self,
-        imp: Impulse<Self::Role, Self::Synapse>,
-    ) -> Result<Self> {
+    fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddInput(
-                CounterRole::Incrementer,
-                CounterSynapse::Input(rx),
+            Impulse::AddDendrite(
+                CounterSynapse::Increment,
+                CounterDendrite::Counter(rx),
             ) => {
                 println!("counter got input");
 
@@ -254,11 +281,11 @@ fn test_organelle() {
 
     let mut organelle = Organelle::new(Incrementer::axon(), handle.clone());
 
-    let incrementer = organelle.main();
+    let incrementer = organelle.nucleus();
     let counter = organelle.add_soma(Counter::axon());
 
     organelle
-        .connect(incrementer, counter, IncrementerRole::Counter)
+        .connect(incrementer, counter, IncrementerSynapse::Increment)
         .unwrap();
 
     core.run(organelle.run(handle)).unwrap();
