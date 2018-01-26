@@ -10,7 +10,7 @@ use tokio_core::reactor;
 use uuid::Uuid;
 
 use super::{Error, Result};
-use probe::ProbeData;
+use probe::SomaData;
 use soma::{Impulse, Soma, Synapse};
 
 /// a soma designed to facilitate connections between other somas
@@ -24,6 +24,8 @@ where
     T: Soma,
 {
     handle: reactor::Handle,
+
+    uuid: Option<Uuid>,
 
     main: Uuid,
     main_tx: mpsc::Sender<Impulse<T::Synapse>>,
@@ -39,6 +41,8 @@ impl<T: Soma + 'static> Organelle<T> {
 
         let mut organelle = Self {
             handle: handle,
+
+            uuid: None,
 
             main: Uuid::new_v4(),
             main_tx: tx,
@@ -77,7 +81,7 @@ impl<T: Soma + 'static> Organelle<T> {
         self.handle.spawn(
             soma_tx
                 .send_all(rx.map(|imp| match imp {
-                    Impulse::Start(sender, handle) => {
+                    Impulse::Start(uuid, sender, handle) => {
                         let (tx, rx) = mpsc::channel::<Impulse<R>>(1);
 
                         handle.spawn(
@@ -89,7 +93,7 @@ impl<T: Soma + 'static> Organelle<T> {
                                 .map_err(|_| ()),
                         );
 
-                        Impulse::Start(tx, handle)
+                        Impulse::Start(uuid, tx, handle)
                     },
                     _ => Impulse::<R>::convert_from(imp),
                 }).map_err(|_| unreachable!()))
@@ -162,7 +166,7 @@ impl<T: Soma + 'static> Organelle<T> {
 
         self.handle.spawn(
             dendrite_sender
-                .send(Impulse::AddTerminal(synapse, tx))
+                .send(Impulse::AddTerminal(terminal, synapse, tx))
                 .map(|_| ())
                 .map_err(|_| {
                     eprintln!("unable to add terminal");
@@ -170,7 +174,7 @@ impl<T: Soma + 'static> Organelle<T> {
         );
         self.handle.spawn(
             terminal_sender
-                .send(Impulse::AddDendrite(synapse, rx))
+                .send(Impulse::AddDendrite(dendrite, synapse, rx))
                 .map(|_| ())
                 .map_err(|_| {
                     eprintln!("unable to add dendrite");
@@ -185,11 +189,11 @@ impl<T: Soma + 'static> Organelle<T> {
         tx: mpsc::Sender<Impulse<T::Synapse>>,
         handle: reactor::Handle,
     ) -> Result<()> {
-        for sender in self.somas.values() {
+        for (uuid, sender) in &self.somas {
             self.handle.spawn(
                 sender
                     .clone()
-                    .send(Impulse::Start(tx.clone(), handle.clone()))
+                    .send(Impulse::Start(*uuid, tx.clone(), handle.clone()))
                     .then(|_| future::ok(())),
             );
         }
@@ -198,7 +202,7 @@ impl<T: Soma + 'static> Organelle<T> {
     }
 
     #[async]
-    fn probe(self, tx: oneshot::Sender<ProbeData>) -> Result<Self> {
+    fn probe(self, tx: oneshot::Sender<SomaData>) -> Result<Self> {
         let (organelle, data) = await!(self.probe_data())?;
 
         if let Err(_) = tx.send(data) {
@@ -214,7 +218,7 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
     type Error = Error;
 
     #[async(boxed)]
-    fn probe_data(self) -> Result<(Self, ProbeData)> {
+    fn probe_data(self) -> Result<(Self, SomaData)> {
         let results = await!(
             stream::iter_ok(self.somas.clone())
                 .map(|(uuid, sender)| {
@@ -248,11 +252,14 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
             })
             .collect();
 
+        let uuid = self.uuid.unwrap();
+
         Ok((
             self,
-            ProbeData::Organelle {
+            SomaData::Organelle {
                 nucleus: Box::new(nucleus.unwrap()),
                 somas: somas,
+                uuid: uuid,
             },
         ))
     }
@@ -260,7 +267,7 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
     #[async(boxed)]
     fn update(mut self, imp: Impulse<T::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddDendrite(_, _) | Impulse::AddTerminal(_, _) => {
+            Impulse::AddDendrite(_, _, _) | Impulse::AddTerminal(_, _, _) => {
                 await!(
                     self.somas
                         .get(&self.nucleus())
@@ -271,7 +278,9 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
                 )?;
                 Ok(self)
             },
-            Impulse::Start(tx, handle) => {
+            Impulse::Start(uuid, tx, handle) => {
+                self.uuid = Some(uuid);
+
                 let rx = mem::replace(&mut self.main_rx, None).unwrap();
 
                 handle.spawn(
@@ -300,9 +309,11 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
     {
         let (tx, rx) = mpsc::channel(1);
 
+        let uuid = Uuid::new_v4();
+
         await!(
             tx.clone()
-                .send(Impulse::Start(tx, handle))
+                .send(Impulse::Start(uuid, tx, handle))
                 .map_err(|_| Error::from("unable to send start signal"))
         )?;
 

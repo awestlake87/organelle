@@ -9,7 +9,7 @@ homepage = "https://github.com/awestlake87/organelle"
 repository = "https://github.com/awestlake87/organelle"
 
 [features]
-visualizer = ["hyper", "hyper-staticfile", "open"]
+visualizer = ["hyper", "hyper-staticfile", "open", "dot"]
 
 [workspace]
 members = []
@@ -27,6 +27,7 @@ serde_json = "1.0"
 hyper = { version = "0.11", optional = true }
 hyper-staticfile = { version = "0.1", optional = true }
 open = { version = "1.2", optional = true }
+dot = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio-timer = "0.1"

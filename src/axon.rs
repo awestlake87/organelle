@@ -1,28 +1,35 @@
 use std::collections::HashMap;
+use std::intrinsics;
 
 use futures::prelude::*;
 use futures::unsync::oneshot;
+use uuid::Uuid;
 
-use super::{Error, ErrorKind, Impulse, Result, Soma};
-use probe::ProbeData;
+use super::{Error, ErrorKind, Result};
+use probe::{ConstraintData, SomaData};
+use soma::{Impulse, Soma, Synapse};
 
 /// constraints that can be put on axons for validation purposes
-pub enum Constraint<R> {
+pub enum Constraint<S: Synapse> {
     /// only accept one synapse
-    One(R),
+    One(S),
     /// accept any number of synapses
-    Variadic(R),
+    Variadic(S),
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug)]
 enum Requirement {
     Unmet,
-    Met,
+    MetOne(Uuid),
+    MetVariadic(Vec<Uuid>),
 }
 
 /// wrap a soma with a set of requirements that will be validated upon startup
 pub struct Axon<T: Soma + 'static> {
     soma: T,
+
+    uuid: Option<Uuid>,
+
     dendrites: HashMap<T::Synapse, (Constraint<T::Synapse>, Requirement)>,
     terminals: HashMap<T::Synapse, (Constraint<T::Synapse>, Requirement)>,
 }
@@ -37,15 +44,22 @@ impl<T: Soma + 'static> Axon<T> {
     ) -> Self {
         Self {
             soma: soma,
+
+            uuid: None,
+
             dendrites: dendrites
                 .iter()
                 .map(|d| match d {
                     &Constraint::One(r) => {
                         (r, (Constraint::One(r), Requirement::Unmet))
                     },
-                    &Constraint::Variadic(r) => {
-                        (r, (Constraint::Variadic(r), Requirement::Met))
-                    },
+                    &Constraint::Variadic(r) => (
+                        r,
+                        (
+                            Constraint::Variadic(r),
+                            Requirement::MetVariadic(vec![]),
+                        ),
+                    ),
                 })
                 .collect(),
             terminals: terminals
@@ -54,26 +68,39 @@ impl<T: Soma + 'static> Axon<T> {
                     &Constraint::One(r) => {
                         (r, (Constraint::One(r), Requirement::Unmet))
                     },
-                    &Constraint::Variadic(r) => {
-                        (r, (Constraint::Variadic(r), Requirement::Met))
-                    },
+                    &Constraint::Variadic(r) => (
+                        r,
+                        (
+                            Constraint::Variadic(r),
+                            Requirement::MetVariadic(vec![]),
+                        ),
+                    ),
                 })
                 .collect(),
         }
     }
 
-    fn add_dendrite(&mut self, synapse: T::Synapse) -> Result<()> {
+    fn add_dendrite(&mut self, uuid: Uuid, synapse: T::Synapse) -> Result<()> {
         if let Some(&mut (ref mut constraint, ref mut req)) =
             self.dendrites.get_mut(&synapse)
         {
             match constraint {
                 &mut Constraint::One(_) => match req {
-                    &mut Requirement::Unmet => *req = Requirement::Met,
-                    &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
-                        format!("expected only one dendrite for {:?}", synapse)
-                    )),
+                    &mut Requirement::Unmet => *req = Requirement::MetOne(uuid),
+                    &mut Requirement::MetOne(_) => {
+                        bail!(ErrorKind::InvalidSynapse(format!(
+                            "expected only one dendrite for {:?}",
+                            synapse
+                        )))
+                    },
+                    _ => unreachable!(),
                 },
-                &mut Constraint::Variadic(_) => (),
+                &mut Constraint::Variadic(_) => match req {
+                    &mut Requirement::MetVariadic(ref mut dendrites) => {
+                        dendrites.push(uuid);
+                    },
+                    _ => unreachable!(),
+                },
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
@@ -85,18 +112,27 @@ impl<T: Soma + 'static> Axon<T> {
         Ok(())
     }
 
-    fn add_terminal(&mut self, synapse: T::Synapse) -> Result<()> {
+    fn add_terminal(&mut self, uuid: Uuid, synapse: T::Synapse) -> Result<()> {
         if let Some(&mut (ref mut constraint, ref mut req)) =
             self.terminals.get_mut(&synapse)
         {
             match constraint {
                 &mut Constraint::One(_) => match req {
-                    &mut Requirement::Unmet => *req = Requirement::Met,
-                    &mut Requirement::Met => bail!(ErrorKind::InvalidSynapse(
-                        format!("expected only one terminal for {:?}", synapse)
-                    )),
+                    &mut Requirement::Unmet => *req = Requirement::MetOne(uuid),
+                    &mut Requirement::MetOne(_) => {
+                        bail!(ErrorKind::InvalidSynapse(format!(
+                            "expected only one terminal for {:?}",
+                            synapse
+                        )))
+                    },
+                    _ => unreachable!(),
                 },
-                &mut Constraint::Variadic(_) => (),
+                &mut Constraint::Variadic(_) => match req {
+                    &mut Requirement::MetVariadic(ref mut terminals) => {
+                        terminals.push(uuid);
+                    },
+                    _ => unreachable!(),
+                },
             }
         } else {
             bail!(ErrorKind::InvalidSynapse(format!(
@@ -108,28 +144,38 @@ impl<T: Soma + 'static> Axon<T> {
         Ok(())
     }
 
-    fn start(&self) -> Result<()> {
+    fn start(&mut self, uuid: Uuid) -> Result<()> {
+        self.uuid = Some(uuid);
+
         for (synapse, &(ref constraint, ref req)) in &self.dendrites {
             match constraint {
                 &Constraint::One(_) => match req {
-                    &Requirement::Met => (),
+                    &Requirement::MetOne(_) => (),
                     &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
                         format!("expected dendrite synapse for {:?}", *synapse)
                     )),
+                    _ => unreachable!(),
                 },
-                &Constraint::Variadic(_) => assert_eq!(*req, Requirement::Met),
+                &Constraint::Variadic(_) => match req {
+                    &Requirement::MetVariadic(_) => (),
+                    _ => unreachable!(),
+                },
             }
         }
 
         for (synapse, &(ref constraint, ref req)) in &self.terminals {
             match constraint {
                 &Constraint::One(_) => match req {
-                    &Requirement::Met => (),
+                    &Requirement::MetOne(_) => (),
                     &Requirement::Unmet => bail!(ErrorKind::MissingSynapse(
                         format!("expected terminal synapse for {:?}", *synapse)
                     )),
+                    _ => unreachable!(),
                 },
-                &Constraint::Variadic(_) => assert_eq!(*req, Requirement::Met),
+                &Constraint::Variadic(_) => match req {
+                    &Requirement::MetVariadic(_) => (),
+                    _ => unreachable!(),
+                },
             }
         }
 
@@ -137,7 +183,7 @@ impl<T: Soma + 'static> Axon<T> {
     }
 
     #[async]
-    fn probe(self, tx: oneshot::Sender<ProbeData>) -> Result<Self> {
+    fn probe(self, tx: oneshot::Sender<SomaData>) -> Result<Self> {
         let (axon, data) = await!(self.probe_data())?;
 
         if let Err(_) = tx.send(data) {
@@ -153,31 +199,88 @@ impl<T: Soma + 'static> Soma for Axon<T> {
     type Error = Error;
 
     #[async(boxed)]
-    fn probe_data(self) -> Result<(Self, ProbeData)> {
-        Ok((self, ProbeData::Axon))
+    fn probe_data(self) -> Result<(Self, SomaData)> {
+        let terminals = self.terminals
+            .iter()
+            .map(|(synapse, &(ref constraint, ref requirement))| {
+                match constraint {
+                    &Constraint::One(_) => ConstraintData::One {
+                        variant: format!("{:?}", *synapse),
+                        soma: match requirement {
+                            &Requirement::MetOne(ref uuid) => *uuid,
+                            _ => panic!("axon failed to validate"),
+                        },
+                    },
+                    &Constraint::Variadic(_) => ConstraintData::Variadic {
+                        variant: format!("{:?}", *synapse),
+                        somas: match requirement {
+                            &Requirement::MetVariadic(ref somas) => {
+                                somas.clone()
+                            },
+                            _ => unreachable!(),
+                        },
+                    },
+                }
+            })
+            .collect();
+        let dendrites = self.dendrites
+            .iter()
+            .map(|(synapse, &(ref constraint, ref requirement))| {
+                match constraint {
+                    &Constraint::One(_) => ConstraintData::One {
+                        variant: format!("{:?}", *synapse),
+                        soma: match requirement {
+                            &Requirement::MetOne(ref uuid) => *uuid,
+                            _ => panic!("axon failed to validate"),
+                        },
+                    },
+                    &Constraint::Variadic(_) => ConstraintData::Variadic {
+                        variant: format!("{:?}", *synapse),
+                        somas: match requirement {
+                            &Requirement::MetVariadic(ref somas) => {
+                                somas.clone()
+                            },
+                            _ => unreachable!(),
+                        },
+                    },
+                }
+            })
+            .collect();
+
+        let uuid = self.uuid.unwrap();
+
+        Ok((
+            self,
+            SomaData::Axon {
+                terminals: terminals,
+                dendrites: dendrites,
+                uuid: uuid,
+                name: unsafe { intrinsics::type_name::<T>().to_string() },
+            },
+        ))
     }
 
     #[async(boxed)]
     fn update(mut self, imp: Impulse<T::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddDendrite(synapse, _) => {
-                self.add_dendrite(synapse)?;
+            Impulse::AddDendrite(uuid, synapse, _) => {
+                self.add_dendrite(uuid, synapse)?;
 
                 self.soma =
                     await!(self.soma.update(imp)).map_err(|e| e.into())?;
 
                 Ok(self)
             },
-            Impulse::AddTerminal(synapse, _) => {
-                self.add_terminal(synapse)?;
+            Impulse::AddTerminal(uuid, synapse, _) => {
+                self.add_terminal(uuid, synapse)?;
 
                 self.soma =
                     await!(self.soma.update(imp)).map_err(|e| e.into())?;
 
                 Ok(self)
             },
-            Impulse::Start(_, _) => {
-                self.start()?;
+            Impulse::Start(uuid, _, _) => {
+                self.start(uuid)?;
 
                 self.soma =
                     await!(self.soma.update(imp)).map_err(|e| e.into())?;

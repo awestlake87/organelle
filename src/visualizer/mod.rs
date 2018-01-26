@@ -48,12 +48,12 @@ impl soma::Soma for Soma {
     #[async(boxed)]
     fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddTerminal(Synapse::Probe, tx) => {
+            Impulse::AddTerminal(_, Synapse::Probe, tx) => {
                 self.probe = Some(tx);
                 Ok(self)
             },
 
-            Impulse::Start(main_tx, handle) => {
+            Impulse::Start(_, main_tx, handle) => {
                 handle.spawn(
                     VisualizerTask::new(
                         self.probe.unwrap(),

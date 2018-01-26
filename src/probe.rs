@@ -1,23 +1,54 @@
 use futures::prelude::*;
 use futures::unsync::{mpsc, oneshot};
 use tokio_core::reactor;
+use uuid::Uuid;
 
 use super::{Error, Result};
 use axon::{Axon, Constraint};
 use soma::{self, Impulse};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+pub struct SynapseData(pub String);
+
+#[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-pub enum ProbeData {
-    #[serde(rename = "organelle")]
-    Organelle {
-        nucleus: Box<ProbeData>,
-        somas: Vec<ProbeData>,
+pub enum ConstraintData {
+    #[serde(rename = "one")]
+    One {
+        variant: String,
+        soma: Uuid,
     },
 
-    #[serde(rename = "axon")] Axon,
+    #[serde(rename = "variadic")]
+    Variadic {
+        variant: String,
+        somas: Vec<Uuid>,
+    },
+}
 
-    #[serde(rename = "soma")] Soma,
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum SomaData {
+    #[serde(rename = "organelle")]
+    Organelle {
+        nucleus: Box<SomaData>,
+        somas: Vec<SomaData>,
+        uuid: Uuid,
+    },
+
+    #[serde(rename = "axon")]
+    Axon {
+        terminals: Vec<ConstraintData>,
+        dendrites: Vec<ConstraintData>,
+        uuid: Uuid,
+        name: String,
+    },
+
+    #[serde(rename = "soma")]
+    Soma {
+        synapse: SynapseData,
+        name: String,
+    },
 }
 
 pub struct Soma {
@@ -41,7 +72,7 @@ pub enum Synapse {
 
 #[derive(Debug)]
 enum Request {
-    Probe(oneshot::Sender<ProbeData>),
+    Probe(oneshot::Sender<SomaData>),
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +82,7 @@ pub struct Terminal {
 
 impl Terminal {
     #[async]
-    pub fn probe(self) -> Result<ProbeData> {
+    pub fn probe(self) -> Result<SomaData> {
         let (tx, rx) = oneshot::channel();
 
         await!(
@@ -92,13 +123,13 @@ impl soma::Soma for Soma {
     #[async(boxed)]
     fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
-            Impulse::AddDendrite(Synapse::Probe, rx) => {
+            Impulse::AddDendrite(_, Synapse::Probe, rx) => {
                 self.dendrites.push(rx);
 
                 Ok(self)
             },
 
-            Impulse::Start(main_tx, handle) => {
+            Impulse::Start(_, main_tx, handle) => {
                 handle.spawn(
                     ProbeTask::run(
                         main_tx.clone(),

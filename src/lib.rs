@@ -33,7 +33,7 @@ pub mod probe;
 
 pub use axon::{Axon, Constraint};
 pub use organelle::Organelle;
-pub use probe::ProbeData;
+pub use probe::{ConstraintData, SomaData};
 pub use soma::{Impulse, Soma, Synapse};
 
 /// organelle error
@@ -74,6 +74,7 @@ error_chain! {
     }
 }
 
+#[cfg(feature = "visualizer")]
 impl From<Error> for hyper::Error {
     fn from(e: Error) -> Self {
         hyper::Error::Io(std::io::Error::new(
