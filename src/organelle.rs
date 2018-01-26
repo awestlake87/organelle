@@ -4,11 +4,14 @@ use std::mem;
 
 use futures::future;
 use futures::prelude::*;
-use futures::unsync;
+use futures::stream;
+use futures::unsync::{mpsc, oneshot};
 use tokio_core::reactor;
 use uuid::Uuid;
 
-use super::{Error, Impulse, Result, Soma, Synapse};
+use super::{Error, Result};
+use probe::ProbeData;
+use soma::{Impulse, Soma, Synapse};
 
 /// a soma designed to facilitate connections between other somas
 ///
@@ -23,16 +26,16 @@ where
     handle: reactor::Handle,
 
     main: Uuid,
-    main_tx: unsync::mpsc::Sender<Impulse<T::Synapse>>,
-    main_rx: Option<unsync::mpsc::Receiver<Impulse<T::Synapse>>>,
+    main_tx: mpsc::Sender<Impulse<T::Synapse>>,
+    main_rx: Option<mpsc::Receiver<Impulse<T::Synapse>>>,
 
-    somas: HashMap<Uuid, unsync::mpsc::Sender<Impulse<T::Synapse>>>,
+    somas: HashMap<Uuid, mpsc::Sender<Impulse<T::Synapse>>>,
 }
 
 impl<T: Soma + 'static> Organelle<T> {
     /// create a new organelle
     pub fn new(main: T, handle: reactor::Handle) -> Self {
-        let (tx, rx) = unsync::mpsc::channel(100);
+        let (tx, rx) = mpsc::channel(100);
 
         let mut organelle = Self {
             handle: handle,
@@ -55,9 +58,7 @@ impl<T: Soma + 'static> Organelle<T> {
         self.main
     }
 
-    fn create_soma_channel<R>(
-        &mut self,
-    ) -> (Uuid, unsync::mpsc::Receiver<Impulse<R>>)
+    fn create_soma_channel<R>(&mut self) -> (Uuid, mpsc::Receiver<Impulse<R>>)
     where
         R: Synapse + From<T::Synapse> + Into<T::Synapse> + 'static,
         R::Dendrite: From<<T::Synapse as Synapse>::Dendrite>
@@ -69,15 +70,15 @@ impl<T: Soma + 'static> Organelle<T> {
     {
         let uuid = Uuid::new_v4();
 
-        let (tx, rx) = unsync::mpsc::channel::<Impulse<T::Synapse>>(10);
+        let (tx, rx) = mpsc::channel::<Impulse<T::Synapse>>(10);
 
-        let (soma_tx, soma_rx) = unsync::mpsc::channel::<Impulse<R>>(1);
+        let (soma_tx, soma_rx) = mpsc::channel::<Impulse<R>>(1);
 
         self.handle.spawn(
             soma_tx
                 .send_all(rx.map(|imp| match imp {
                     Impulse::Start(sender, handle) => {
-                        let (tx, rx) = unsync::mpsc::channel::<Impulse<R>>(1);
+                        let (tx, rx) = mpsc::channel::<Impulse<R>>(1);
 
                         handle.spawn(
                             sender
@@ -104,7 +105,7 @@ impl<T: Soma + 'static> Organelle<T> {
     #[async]
     fn run_soma<U: Soma + 'static>(
         mut soma: U,
-        soma_rx: unsync::mpsc::Receiver<Impulse<U::Synapse>>,
+        soma_rx: mpsc::Receiver<Impulse<U::Synapse>>,
     ) -> std::result::Result<(), Error> {
         #[async]
         for imp in soma_rx.map_err(|_| -> Error { unreachable!() }) {
@@ -181,7 +182,7 @@ impl<T: Soma + 'static> Organelle<T> {
 
     fn start_all(
         &self,
-        tx: unsync::mpsc::Sender<Impulse<T::Synapse>>,
+        tx: mpsc::Sender<Impulse<T::Synapse>>,
         handle: reactor::Handle,
     ) -> Result<()> {
         for sender in self.somas.values() {
@@ -195,11 +196,66 @@ impl<T: Soma + 'static> Organelle<T> {
 
         Ok(())
     }
+
+    #[async]
+    fn probe(self, tx: oneshot::Sender<ProbeData>) -> Result<Self> {
+        let (organelle, data) = await!(self.probe_data())?;
+
+        if let Err(_) = tx.send(data) {
+            // rx does not care anymore
+        }
+
+        Ok(organelle)
+    }
 }
 
 impl<T: Soma + 'static> Soma for Organelle<T> {
     type Synapse = T::Synapse;
     type Error = Error;
+
+    #[async(boxed)]
+    fn probe_data(self) -> Result<(Self, ProbeData)> {
+        let results = await!(
+            stream::iter_ok(self.somas.clone())
+                .map(|(uuid, sender)| {
+                    let (tx, rx) = oneshot::channel();
+
+                    sender
+                        .send(Impulse::Probe(tx))
+                        .map_err(|_| {
+                            Error::from("unable to send probe impulse")
+                        })
+                        .and_then(move |_| {
+                            rx.map(move |rx| (uuid, rx)).map_err(|e| e.into())
+                        })
+                })
+                .collect()
+                .and_then(|receivers| future::join_all(receivers))
+        )?;
+
+        let nucleus_uuid = self.nucleus();
+        let mut nucleus = None;
+
+        let somas = results
+            .into_iter()
+            .filter_map(|(uuid, data)| {
+                if uuid == nucleus_uuid {
+                    nucleus = Some(data);
+                    None
+                } else {
+                    Some(data)
+                }
+            })
+            .collect();
+
+        Ok((
+            self,
+            ProbeData::Organelle {
+                nucleus: Box::new(nucleus.unwrap()),
+                somas: somas,
+            },
+        ))
+    }
 
     #[async(boxed)]
     fn update(mut self, imp: Impulse<T::Synapse>) -> Result<Self> {
@@ -230,7 +286,9 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
                 Ok(self)
             },
 
-            _ => unimplemented!(),
+            Impulse::Probe(tx) => await!(self.probe(tx)),
+
+            Impulse::Stop | Impulse::Error(_) => unreachable!(),
         }
     }
 
@@ -240,7 +298,7 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
     where
         Self: 'static,
     {
-        let (tx, rx) = unsync::mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(1);
 
         await!(
             tx.clone()

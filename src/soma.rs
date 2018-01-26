@@ -3,23 +3,25 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use futures::prelude::*;
-use futures::unsync;
+use futures::unsync::{mpsc, oneshot};
 use tokio_core::reactor;
 
 use super::{Error, Result};
+use probe::ProbeData;
 
 /// trait alias to express requirements of a Synapse type
 pub trait Synapse: Debug + Copy + Clone + Hash + PartialEq + Eq {
     /// terminals are the senders or outputs in a connection between somas
-    type Terminal;
+    type Terminal: Debug;
     /// dendrites are the receivers or inputs in a connection between somas
-    type Dendrite;
+    type Dendrite: Debug;
 
     /// form a synapse for this synapse into a terminal and dendrite
     fn synapse(self) -> (Self::Terminal, Self::Dendrite);
 }
 
 /// a group of control signals passed between somas
+#[derive(Debug)]
 pub enum Impulse<R: Synapse> {
     /// add a dendrite for input to the soma
     ///
@@ -37,7 +39,7 @@ pub enum Impulse<R: Synapse> {
     ///
     /// you should always expect to handle this impulse because it will be
     /// passed to each soma regardless of configuration
-    Start(unsync::mpsc::Sender<Impulse<R>>, reactor::Handle),
+    Start(mpsc::Sender<Impulse<R>>, reactor::Handle),
     /// stop the event loop and exit gracefully
     ///
     /// you should not expect to handle this impulse at any time, it is handled
@@ -51,6 +53,7 @@ pub enum Impulse<R: Synapse> {
     /// you should not expect to handle this impulse at any time, it is handled
     /// for you by the event loop
     Error(Error),
+    Probe(oneshot::Sender<ProbeData>),
 }
 
 impl<R> Impulse<R>
@@ -75,6 +78,8 @@ where
             Impulse::Error(e) => Impulse::Error(e),
 
             Impulse::Start(_, _) => panic!("no automatic conversion for start"),
+
+            Impulse::Probe(tx) => Impulse::Probe(tx),
         }
     }
 }
@@ -92,6 +97,15 @@ pub trait Soma: Sized {
     /// the types of errors that this soma can return
     type Error: std::error::Error + Send + Into<Error>;
 
+    /// probe the internal structure of this soma
+    #[async(boxed)]
+    fn probe_data(self) -> std::result::Result<(Self, ProbeData), Self::Error>
+    where
+        Self: 'static,
+    {
+        Ok((self, ProbeData::Soma))
+    }
+
     /// react to a single impulse
     fn update(
         self,
@@ -105,7 +119,7 @@ pub trait Soma: Sized {
         Self: 'static,
     {
         // it's important that tx live through this function
-        let (tx, rx) = unsync::mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(1);
 
         await!(
             tx.clone()

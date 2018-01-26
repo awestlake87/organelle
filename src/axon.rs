@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use futures::prelude::*;
+use futures::unsync::oneshot;
 
 use super::{Error, ErrorKind, Impulse, Result, Soma};
+use probe::ProbeData;
 
 /// constraints that can be put on axons for validation purposes
 pub enum Constraint<R> {
@@ -133,6 +135,17 @@ impl<T: Soma + 'static> Axon<T> {
 
         Ok(())
     }
+
+    #[async]
+    fn probe(self, tx: oneshot::Sender<ProbeData>) -> Result<Self> {
+        let (axon, data) = await!(self.probe_data())?;
+
+        if let Err(_) = tx.send(data) {
+            // rx does not care anymore
+        }
+
+        Ok(axon)
+    }
 }
 
 impl<T: Soma + 'static> Soma for Axon<T> {
@@ -140,32 +153,44 @@ impl<T: Soma + 'static> Soma for Axon<T> {
     type Error = Error;
 
     #[async(boxed)]
+    fn probe_data(self) -> Result<(Self, ProbeData)> {
+        Ok((self, ProbeData::Axon))
+    }
+
+    #[async(boxed)]
     fn update(mut self, imp: Impulse<T::Synapse>) -> Result<Self> {
-        Ok(Self {
-            soma: match imp {
-                Impulse::AddDendrite(synapse, _) => {
-                    self.add_dendrite(synapse)?;
+        match imp {
+            Impulse::AddDendrite(synapse, _) => {
+                self.add_dendrite(synapse)?;
 
-                    await!(self.soma.update(imp)).map_err(|e| e.into())?
-                },
-                Impulse::AddTerminal(synapse, _) => {
-                    self.add_terminal(synapse)?;
+                self.soma =
+                    await!(self.soma.update(imp)).map_err(|e| e.into())?;
 
-                    await!(self.soma.update(imp)).map_err(|e| e.into())?
-                },
-                Impulse::Start(_, _) => {
-                    self.start()?;
-
-                    await!(self.soma.update(imp)).map_err(|e| e.into())?
-                },
-
-                Impulse::Stop | Impulse::Error(_) => {
-                    bail!("unexpected impulse in axon")
-                },
-                //_ => await!(self.soma.update(imp))?,
+                Ok(self)
             },
-            dendrites: self.dendrites,
-            terminals: self.terminals,
-        })
+            Impulse::AddTerminal(synapse, _) => {
+                self.add_terminal(synapse)?;
+
+                self.soma =
+                    await!(self.soma.update(imp)).map_err(|e| e.into())?;
+
+                Ok(self)
+            },
+            Impulse::Start(_, _) => {
+                self.start()?;
+
+                self.soma =
+                    await!(self.soma.update(imp)).map_err(|e| e.into())?;
+
+                Ok(self)
+            },
+
+            Impulse::Probe(tx) => await!(self.probe(tx)),
+
+            Impulse::Stop | Impulse::Error(_) => {
+                bail!("unexpected impulse in axon")
+            },
+            //_ => await!(self.soma.update(imp))?,
+        }
     }
 }
