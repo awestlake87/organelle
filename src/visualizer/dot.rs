@@ -1,25 +1,39 @@
 use std::fmt;
 use std::io::{self, Write};
 
+/// where to aim the endpoint of an edge
 #[derive(Debug, Copy, Clone)]
 pub enum Compass {
+    /// point to the top of a node
     North,
+    /// point to the top-right of a node
     NorthEast,
+    /// point to the right of a node
     East,
+    /// point to the bottom-right of a node
     SouthEast,
+    /// point to the bottom of a node
     South,
+    /// point to the bottom-left of a node
     SouthWest,
+    /// point to the left of a node
     West,
+    /// point to the top-left of a node
     NorthWest,
 }
 
+/// apply attributes to nodes that match this selector
 #[derive(Debug, Copy, Clone)]
 pub enum SelectorKind {
+    /// apply them to the subgraph itself
     Graph,
+    /// apply them to all nodes within the subgraph
     Node,
+    /// apply them to all edges within the subgraph
     Edge,
 }
 
+/// create a selector statement
 #[derive(Debug, Clone)]
 pub struct Selector {
     kind: SelectorKind,
@@ -27,6 +41,7 @@ pub struct Selector {
 }
 
 impl Selector {
+    /// select the graph
     pub fn graph() -> Self {
         Self {
             kind: SelectorKind::Graph,
@@ -34,6 +49,7 @@ impl Selector {
         }
     }
 
+    /// select all nodes
     pub fn node() -> Self {
         Self {
             kind: SelectorKind::Node,
@@ -41,6 +57,7 @@ impl Selector {
         }
     }
 
+    /// select all edges
     pub fn edge() -> Self {
         Self {
             kind: SelectorKind::Edge,
@@ -48,6 +65,7 @@ impl Selector {
         }
     }
 
+    /// add attributes to the selector
     pub fn add<T: Into<Attribute>>(mut self, attr: T) -> Self {
         self.attrs.push(attr.into());
 
@@ -72,11 +90,13 @@ impl Selector {
     }
 }
 
+/// type of edge between two nodes
 #[derive(Debug, Copy, Clone)]
 pub enum EdgeOp {
     Directed,
 }
 
+/// an identifier in the DOT language
 #[derive(Debug, Clone)]
 pub enum Id {
     Ident(String),
@@ -84,10 +104,12 @@ pub enum Id {
 }
 
 impl Id {
+    /// create an unquoted alphanumeric identifier
     pub fn ident<T: Into<String>>(id: T) -> Self {
         Id::Ident(id.into())
     }
 
+    /// create a quoted string that can contain any characters
     pub fn quoted<T>(id: T) -> Self
     where
         String: From<T>,
@@ -107,6 +129,7 @@ impl fmt::Display for Id {
     }
 }
 
+/// identify a node with a port and compass
 #[derive(Debug, Clone)]
 pub struct NodeId {
     id: Id,
@@ -115,6 +138,7 @@ pub struct NodeId {
 }
 
 impl NodeId {
+    /// identify a node
     pub fn new(id: Id) -> Self {
         Self {
             id: id,
@@ -123,6 +147,7 @@ impl NodeId {
         }
     }
 
+    /// add a port to the node id
     pub fn port(self, port: Id) -> Self {
         Self {
             port: Some(port),
@@ -130,6 +155,7 @@ impl NodeId {
         }
     }
 
+    /// point the edge to a part of the node
     pub fn compass(self, compass: Compass) -> Self {
         Self {
             compass: Some(compass),
@@ -137,6 +163,7 @@ impl NodeId {
         }
     }
 
+    /// create an edge from this node to another
     pub fn connect<T: Into<Edge>>(self, op: EdgeOp, rhs: T) -> Edge {
         Edge::from(self).connect(op, rhs)
     }
@@ -169,13 +196,20 @@ impl NodeId {
     }
 }
 
+/// an edge operand
 #[derive(Debug, Clone)]
 pub enum Edge {
+    /// edge operands can be nodes
     Node(NodeId),
+    /// edge operands can be subgraphs
     SubGraph(SubGraph),
+    /// edge operands can be recursive
     Edge {
+        /// lhs of an edge
         lhs: Box<Edge>,
+        /// type of edge
         op: EdgeOp,
+        /// rhs of an edge
         rhs: Box<Edge>,
     },
 }
@@ -193,14 +227,7 @@ impl From<SubGraph> for Edge {
 }
 
 impl Edge {
-    pub fn node(node: NodeId) -> Self {
-        Edge::Node(node)
-    }
-
-    pub fn subgraph(subgraph: SubGraph) -> Self {
-        Edge::SubGraph(subgraph)
-    }
-
+    /// add more operands to the edge
     pub fn connect<T: Into<Edge>>(self, op: EdgeOp, rhs: T) -> Self {
         Edge::Edge {
             lhs: Box::new(self),
@@ -230,6 +257,7 @@ impl Edge {
     }
 }
 
+/// a subgraph structure
 #[derive(Debug, Clone)]
 pub struct SubGraph {
     strict: bool,
@@ -240,6 +268,7 @@ pub struct SubGraph {
 }
 
 impl SubGraph {
+    /// create a new subgraph
     pub fn new() -> Self {
         Self {
             strict: false,
@@ -248,6 +277,7 @@ impl SubGraph {
         }
     }
 
+    /// make the subgraph strict
     pub fn strict(self) -> Self {
         Self {
             strict: true,
@@ -255,6 +285,7 @@ impl SubGraph {
         }
     }
 
+    /// set the name of the subgraph
     pub fn id(self, id: Id) -> Self {
         Self {
             id: Some(id),
@@ -262,6 +293,7 @@ impl SubGraph {
         }
     }
 
+    /// add statements to the body of the subgraph
     pub fn add<T: Into<Statement>>(mut self, statement: T) -> Self {
         self.statements.push(statement.into());
 
@@ -299,12 +331,15 @@ fn write_indents(writer: &mut Write, indents: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// the root AST node
 #[derive(Debug, Clone)]
 pub enum Dot {
+    /// create a directed graph
     DiGraph(SubGraph),
 }
 
 impl Dot {
+    /// render the AST to the writer
     pub fn render(&self, writer: &mut Write) -> io::Result<()> {
         self.write(writer, 0)
     }
@@ -339,12 +374,18 @@ impl Dot {
     }
 }
 
+/// a DOT statement
 #[derive(Debug, Clone)]
 pub enum Statement {
+    /// declare a standalone node
     Node(Node),
+    /// declare an edge or set of edges
     Edge(Edge),
+    /// apply attributes to a set of nodes/edges
     Selector(Selector),
+    /// an attribute statement
     Attribute(Attribute),
+    /// a subgraph statement
     SubGraph(SubGraph),
 }
 

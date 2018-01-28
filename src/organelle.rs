@@ -11,7 +11,7 @@ use tokio_core::reactor;
 use uuid::Uuid;
 
 use super::{Error, Result};
-use probe::SomaData;
+use probe::{self, SomaData};
 use soma::{Impulse, Soma, Synapse};
 
 /// a soma designed to facilitate connections between other somas
@@ -203,8 +203,12 @@ impl<T: Soma + 'static> Organelle<T> {
     }
 
     #[async]
-    fn probe(self, tx: oneshot::Sender<SomaData>) -> Result<Self> {
-        let (organelle, data) = await!(self.probe_data())?;
+    fn perform_probe(
+        self,
+        settings: probe::Settings,
+        tx: oneshot::Sender<SomaData>,
+    ) -> Result<Self> {
+        let (organelle, data) = await!(self.probe(settings))?;
 
         if let Err(_) = tx.send(data) {
             // rx does not care anymore
@@ -219,14 +223,14 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
     type Error = Error;
 
     #[async(boxed)]
-    fn probe_data(self) -> Result<(Self, SomaData)> {
+    fn probe(self, settings: probe::Settings) -> Result<(Self, SomaData)> {
         let results = await!(
             stream::iter_ok(self.somas.clone())
-                .map(|(uuid, sender)| {
+                .map(move |(uuid, sender)| {
                     let (tx, rx) = oneshot::channel();
 
                     sender
-                        .send(Impulse::Probe(tx))
+                        .send(Impulse::Probe(settings.clone(), tx))
                         .map_err(|_| {
                             Error::from("unable to send probe impulse")
                         })
@@ -297,7 +301,9 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
                 Ok(self)
             },
 
-            Impulse::Probe(tx) => await!(self.probe(tx)),
+            Impulse::Probe(settings, tx) => {
+                await!(self.perform_probe(settings, tx))
+            },
 
             Impulse::Stop | Impulse::Error(_) => unreachable!(),
         }

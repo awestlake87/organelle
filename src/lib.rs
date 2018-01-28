@@ -25,9 +25,11 @@ mod axon;
 mod organelle;
 mod soma;
 
+/// visualization soma used to visualize the results of a probe
 #[cfg(feature = "visualizer")]
 pub mod visualizer;
 
+/// probe soma used to inspect the internal structure of an organelle
 pub mod probe;
 
 pub use axon::{Axon, Constraint};

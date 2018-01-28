@@ -9,7 +9,7 @@ use tokio_core::reactor;
 use uuid::Uuid;
 
 use super::{Error, Result};
-use probe::{SomaData, SynapseData};
+use probe::{self, SomaData, SynapseData};
 
 /// trait alias to express requirements of a Synapse type
 pub trait Synapse: Debug + Copy + Clone + Hash + PartialEq + Eq {
@@ -18,6 +18,7 @@ pub trait Synapse: Debug + Copy + Clone + Hash + PartialEq + Eq {
     /// dendrites are the receivers or inputs in a connection between somas
     type Dendrite: Debug;
 
+    /// get the data associated with the synapse
     fn data() -> SynapseData {
         SynapseData(unsafe { intrinsics::type_name::<Self>().to_string() })
     }
@@ -59,7 +60,8 @@ pub enum Impulse<R: Synapse> {
     /// you should not expect to handle this impulse at any time, it is handled
     /// for you by the event loop
     Error(Error),
-    Probe(oneshot::Sender<SomaData>),
+    /// send a probe throughout the organelle
+    Probe(probe::Settings, oneshot::Sender<SomaData>),
 }
 
 impl<R> Impulse<R>
@@ -87,7 +89,7 @@ where
                 panic!("no automatic conversion for start")
             },
 
-            Impulse::Probe(tx) => Impulse::Probe(tx),
+            Impulse::Probe(settings, tx) => Impulse::Probe(settings, tx),
         }
     }
 }
@@ -107,7 +109,10 @@ pub trait Soma: Sized {
 
     /// probe the internal structure of this soma
     #[async(boxed)]
-    fn probe_data(self) -> std::result::Result<(Self, SomaData), Self::Error>
+    fn probe(
+        self,
+        _settings: probe::Settings,
+    ) -> std::result::Result<(Self, SomaData), Self::Error>
     where
         Self: 'static,
     {

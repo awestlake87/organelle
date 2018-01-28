@@ -12,7 +12,10 @@ quick_main!(|| -> Result<()> {
     let mut core = reactor::Core::new()?;
 
     let handle = core.handle();
-    let visualizer = visualizer::Soma::organelle(handle.clone())?;
+    let visualizer = visualizer::Soma::organelle(
+        visualizer::Settings::default().open_on_start(true),
+        handle.clone(),
+    )?;
 
     core.run(visualizer.run(handle))?;
 

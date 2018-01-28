@@ -6,7 +6,7 @@ use futures::unsync::oneshot;
 use uuid::Uuid;
 
 use super::{Error, ErrorKind, Result};
-use probe::{ConstraintData, SomaData};
+use probe::{self, ConstraintData, SomaData};
 use soma::{Impulse, Soma, Synapse};
 
 /// constraints that can be put on axons for validation purposes
@@ -183,8 +183,12 @@ impl<T: Soma + 'static> Axon<T> {
     }
 
     #[async]
-    fn probe(self, tx: oneshot::Sender<SomaData>) -> Result<Self> {
-        let (axon, data) = await!(self.probe_data())?;
+    fn perform_probe(
+        self,
+        settings: probe::Settings,
+        tx: oneshot::Sender<SomaData>,
+    ) -> Result<Self> {
+        let (axon, data) = await!(self.probe(settings))?;
 
         if let Err(_) = tx.send(data) {
             // rx does not care anymore
@@ -199,7 +203,7 @@ impl<T: Soma + 'static> Soma for Axon<T> {
     type Error = Error;
 
     #[async(boxed)]
-    fn probe_data(self) -> Result<(Self, SomaData)> {
+    fn probe(self, _settings: probe::Settings) -> Result<(Self, SomaData)> {
         let terminals = self.terminals
             .iter()
             .map(|(synapse, &(ref constraint, ref requirement))| {
@@ -288,7 +292,9 @@ impl<T: Soma + 'static> Soma for Axon<T> {
                 Ok(self)
             },
 
-            Impulse::Probe(tx) => await!(self.probe(tx)),
+            Impulse::Probe(settings, tx) => {
+                await!(self.perform_probe(settings, tx))
+            },
 
             Impulse::Stop | Impulse::Error(_) => {
                 bail!("unexpected impulse in axon")

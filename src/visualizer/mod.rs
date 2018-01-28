@@ -1,14 +1,13 @@
+#[allow(dead_code)]
 mod dot;
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use bytes::BufMut;
 use futures::future;
 use futures::prelude::*;
-use futures::unsync::mpsc;
-use hyper::{self, header};
+use hyper;
 use hyper::server::{Http, Service};
 use open;
 use serde_json;
@@ -21,21 +20,62 @@ use organelle::Organelle;
 use probe::{self, ConstraintData, SomaData, Synapse, Terminal};
 use soma::{self, Impulse};
 
+/// visualizer settings
+#[derive(Debug, Clone)]
+pub struct Settings {
+    open_on_start: bool,
+    port: u16,
+}
+
+impl Settings {
+    /// open a browser with the visualizer upon starting up
+    pub fn open_on_start(self, flag: bool) -> Self {
+        Self {
+            open_on_start: flag,
+            ..self
+        }
+    }
+
+    /// set the port that the visualizer is hosted on
+    pub fn port(self, port: u16) -> Self {
+        Self { port: port, ..self }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            open_on_start: false,
+            port: 8080,
+        }
+    }
+}
+
+/// soma that hosts a service and a ui that can be viewed in a browser
 pub struct Soma {
+    settings: Settings,
     probe: Option<Terminal>,
 }
 
 impl Soma {
-    pub fn axon() -> Result<Axon<Self>> {
+    /// create a visualizer to use with another probe soma
+    pub fn axon(settings: Settings) -> Result<Axon<Self>> {
         Ok(Axon::new(
-            Self { probe: None },
+            Self {
+                settings: settings,
+                probe: None,
+            },
             vec![],
             vec![Constraint::One(Synapse::Probe)],
         ))
     }
 
-    pub fn organelle(handle: reactor::Handle) -> Result<Organelle<Axon<Self>>> {
-        let mut organelle = Organelle::new(Self::axon()?, handle);
+    /// create a standalone organelle to plug into any system
+    pub fn organelle(
+        settings: Settings,
+        handle: reactor::Handle,
+    ) -> Result<Organelle<Axon<Self>>> {
+        let mut organelle = Organelle::new(Self::axon(settings)?, handle);
 
         let visualizer = organelle.nucleus();
         let probe_soma = organelle.add_soma(probe::Soma::axon());
@@ -61,8 +101,8 @@ impl soma::Soma for Soma {
             Impulse::Start(_, main_tx, handle) => {
                 handle.spawn(
                     VisualizerTask::new(
+                        self.settings.clone(),
                         self.probe.unwrap(),
-                        main_tx.clone(),
                         handle.clone(),
                     ).run()
                         .or_else(move |e| {
@@ -73,7 +113,10 @@ impl soma::Soma for Soma {
                         }),
                 );
 
-                Ok(Self { probe: None })
+                Ok(Self {
+                    settings: self.settings,
+                    probe: None,
+                })
             },
 
             _ => bail!("unexpected impulse {:?}", imp),
@@ -85,22 +128,20 @@ struct VisualizerTask {
     probe: Terminal,
     port: u16,
     open_on_start: bool,
-    main_tx: mpsc::Sender<Impulse<Synapse>>,
     handle: reactor::Handle,
 }
 
 impl VisualizerTask {
     fn new(
+        settings: Settings,
         probe: Terminal,
-        main_tx: mpsc::Sender<Impulse<Synapse>>,
         handle: reactor::Handle,
     ) -> Self {
         Self {
             probe: probe,
-            port: 8080,
-            open_on_start: false,
+            port: settings.port,
+            open_on_start: settings.open_on_start,
 
-            main_tx: main_tx,
             handle: handle,
         }
     }
@@ -110,7 +151,6 @@ impl VisualizerTask {
         let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let stream_handle = self.handle.clone();
         let hypersf_handle = self.handle.clone();
-        let main_tx = self.main_tx.clone();
         let probe = self.probe;
 
         if self.open_on_start {
@@ -149,7 +189,7 @@ struct VisualizerService {
 }
 
 impl VisualizerService {
-    fn new(handle: &reactor::Handle, probe: Terminal) -> Self {
+    fn new(_handle: &reactor::Handle, probe: Terminal) -> Self {
         Self { probe: probe }
     }
 
@@ -193,7 +233,7 @@ impl VisualizerService {
     fn probe_json(probe: Terminal) -> Result<hyper::Response> {
         let mut rsp = hyper::Response::new();
 
-        match await!(probe.probe()) {
+        match await!(probe.probe(probe::Settings::new())) {
             Ok(data) => {
                 rsp.set_body(serde_json::to_string(&data)?);
             },
@@ -210,7 +250,7 @@ impl VisualizerService {
     fn probe_dot(probe: Terminal) -> Result<hyper::Response> {
         let mut rsp = hyper::Response::new();
 
-        match await!(probe.probe()) {
+        match await!(probe.probe(probe::Settings::new())) {
             Ok(data) => {
                 rsp.set_body(render_dot(data)?);
             },
@@ -278,7 +318,6 @@ fn render_organelle(
             &SomaData::Axon {
                 uuid,
                 ref terminals,
-                ref dendrites,
                 ..
             } => {
                 let src_uuid = uuid;
@@ -330,7 +369,6 @@ fn render_organelle(
                                     ))),
                                 ));
                         },
-                        _ => unimplemented!(),
                     }
                 }
             },
@@ -351,7 +389,7 @@ fn render_axon(
     name: String,
     terminals: Vec<ConstraintData>,
     dendrites: Vec<ConstraintData>,
-    remap: &HashMap<Uuid, Uuid>,
+    _remap: &HashMap<Uuid, Uuid>,
 ) -> dot::SubGraph {
     let mut axon = dot::SubGraph::new();
 
@@ -427,12 +465,7 @@ fn render_soma(data: SomaData, remap: &HashMap<Uuid, Uuid>) -> dot::SubGraph {
 
 fn get_uuid(data: &SomaData) -> Option<Uuid> {
     match data {
-        &SomaData::Organelle {
-            uuid,
-            ref nucleus,
-            ref somas,
-            ..
-        } => get_uuid(nucleus),
+        &SomaData::Organelle { ref nucleus, .. } => get_uuid(nucleus),
         &SomaData::Axon { uuid, .. } => Some(uuid),
         _ => None,
     }
@@ -467,8 +500,6 @@ fn render_dot(data: SomaData) -> Result<String> {
     let mut remap = HashMap::new();
 
     remap_uuids(&data, &mut remap);
-
-    println!("{:#?}", remap);
 
     let dot = dot::Dot::DiGraph(
         dot::SubGraph::new().add(render_soma(data, &remap)).add(
