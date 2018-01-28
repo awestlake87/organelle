@@ -1,5 +1,6 @@
 use std;
 use std::collections::HashMap;
+use std::intrinsics;
 use std::mem;
 
 use futures::future;
@@ -260,6 +261,7 @@ impl<T: Soma + 'static> Soma for Organelle<T> {
                 nucleus: Box::new(nucleus.unwrap()),
                 somas: somas,
                 uuid: uuid,
+                name: unsafe { intrinsics::type_name::<Self>().into() },
             },
         ))
     }

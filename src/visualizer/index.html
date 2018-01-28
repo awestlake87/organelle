@@ -3,6 +3,8 @@
 
 <head>
     <meta charset="utf-8">
+
+    <script src="/js/viz-lite.js"></script>
     <script>
 
         function get(url) {
@@ -18,13 +20,14 @@
 </head>
 
 <body>
-    <text id="text"></text>
-
     <script>
-        var probe_results = get("/api/probe/json");
-        console.log(JSON.parse(probe_results));
+        var probe_json = get("/api/probe/json");
+        console.log(JSON.parse(probe_json));
 
-        document.getElementById("text").innerText = probe_results;
+        var probe_dot = get("/api/probe/dot");
+        console.log(probe_dot);
+        var image = Viz(probe_dot, { format: "png-image-element" });
+        document.body.appendChild(image);
     </script>
 </body>
 

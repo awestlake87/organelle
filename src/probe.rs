@@ -7,10 +7,10 @@ use super::{Error, Result};
 use axon::{Axon, Constraint};
 use soma::{self, Impulse};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Eq, PartialEq)]
 pub struct SynapseData(pub String);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Eq, PartialEq)]
 #[serde(tag = "type")]
 pub enum ConstraintData {
     #[serde(rename = "one")]
@@ -26,7 +26,7 @@ pub enum ConstraintData {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Eq, PartialEq)]
 #[serde(tag = "type")]
 pub enum SomaData {
     #[serde(rename = "organelle")]
@@ -34,6 +34,7 @@ pub enum SomaData {
         nucleus: Box<SomaData>,
         somas: Vec<SomaData>,
         uuid: Uuid,
+        name: String,
     },
 
     #[serde(rename = "axon")]

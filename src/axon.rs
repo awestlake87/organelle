@@ -255,7 +255,7 @@ impl<T: Soma + 'static> Soma for Axon<T> {
                 terminals: terminals,
                 dendrites: dendrites,
                 uuid: uuid,
-                name: unsafe { intrinsics::type_name::<T>().to_string() },
+                name: unsafe { intrinsics::type_name::<Self>().to_string() },
             },
         ))
     }

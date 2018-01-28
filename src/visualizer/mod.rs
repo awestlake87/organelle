@@ -1,5 +1,10 @@
+mod dot;
+
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use bytes::BufMut;
 use futures::future;
 use futures::prelude::*;
 use futures::unsync::mpsc;
@@ -9,11 +14,12 @@ use hyper_staticfile::Static;
 use open;
 use serde_json;
 use tokio_core::reactor;
+use uuid::Uuid;
 
 use super::{Error, Result};
 use axon::{Axon, Constraint};
 use organelle::Organelle;
-use probe::{self, Synapse, Terminal};
+use probe::{self, ConstraintData, SomaData, Synapse, Terminal};
 use soma::{self, Impulse};
 
 pub struct Soma {
@@ -154,10 +160,10 @@ impl VisualizerService {
 
     fn get(&self, req: hyper::Request) -> <Self as Service>::Future {
         match req.path() {
-            "/" => Box::new(self.ui.call(req)),
-            _ => Box::new(
+            "/api/probe/json" | "/api/probe/dot" => Box::new(
                 Self::get_api(req, self.probe.clone()).map_err(|e| e.into()),
             ),
+            _ => Box::new(self.ui.call(req)),
         }
     }
 
@@ -168,6 +174,8 @@ impl VisualizerService {
     ) -> Result<hyper::Response> {
         if req.path() == "/api/probe/json" {
             await!(Self::probe_json(probe))
+        } else if req.path() == "/api/probe/dot" {
+            await!(Self::probe_dot(probe))
         } else {
             await!(Self::not_found(req))
         }
@@ -180,6 +188,23 @@ impl VisualizerService {
         match await!(probe.probe()) {
             Ok(data) => {
                 rsp.set_body(serde_json::to_string(&data)?);
+            },
+            Err(e) => {
+                rsp.set_status(hyper::StatusCode::InternalServerError);
+                rsp.set_body(format!("{:#?}", e));
+            },
+        }
+
+        Ok(rsp)
+    }
+
+    #[async]
+    fn probe_dot(probe: Terminal) -> Result<hyper::Response> {
+        let mut rsp = hyper::Response::new();
+
+        match await!(probe.probe()) {
+            Ok(data) => {
+                rsp.set_body(render_dot(data)?);
             },
             Err(e) => {
                 rsp.set_status(hyper::StatusCode::InternalServerError);
@@ -213,4 +238,126 @@ impl Service for VisualizerService {
             _ => Box::new(Self::not_found(req).map_err(|e| e.into())),
         }
     }
+}
+
+fn render_organelle(
+    uuid: Uuid,
+    name: String,
+    nucleus: SomaData,
+    somas: Vec<SomaData>,
+) -> dot::SubGraph {
+    let mut organelle = dot::SubGraph::new()
+        .id(dot::Id::quoted(format!("cluster_{}", uuid)))
+        .add(
+            dot::Selector::graph()
+                .add(dot::Attribute::new(
+                    dot::Id::ident("style"),
+                    dot::Id::ident("rounded"),
+                ))
+                .add(dot::Attribute::new(
+                    dot::Id::ident("label"),
+                    dot::Id::quoted(name),
+                )),
+        )
+        .add(render_soma(nucleus));
+
+    for soma in somas {
+        organelle = organelle.add(render_soma(soma));
+    }
+
+    organelle
+}
+
+fn render_axon(
+    uuid: Uuid,
+    name: String,
+    terminals: Vec<ConstraintData>,
+    dendrites: Vec<ConstraintData>,
+) -> dot::SubGraph {
+    let mut axon = dot::SubGraph::new();
+
+    let terminals: Vec<String> = terminals
+        .into_iter()
+        .map(|t| match t {
+            ConstraintData::One { variant, .. } => {
+                format!("<t_{}> {}", variant, variant)
+            },
+            ConstraintData::Variadic { variant, .. } => {
+                format!("<t_{}> {}", variant, variant)
+            },
+        })
+        .collect();
+
+    let terminals = terminals.join(" | ");
+
+    let dendrites: Vec<String> = dendrites
+        .into_iter()
+        .map(|d| match d {
+            ConstraintData::One { variant, .. } => {
+                format!("<d_{}> {}", variant, variant)
+            },
+            ConstraintData::Variadic { variant, .. } => {
+                format!("<d_{}> {}", variant, variant)
+            },
+        })
+        .collect();
+
+    let dendrites = dendrites.join(" | ");
+
+    println!("{}, {}", terminals, dendrites);
+
+    axon = axon.add(
+        dot::Node::new(dot::Id::quoted(uuid.to_string()))
+            .add(dot::Attribute::new(
+                dot::Id::ident("label"),
+                dot::Id::quoted(format!(
+                    "<name> {} | {{ {} }} | {{ {} }}",
+                    name.replace("<", "\\<").replace(">", "\\>"),
+                    terminals,
+                    dendrites,
+                )),
+            ))
+            .add(dot::Attribute::new(
+                dot::Id::ident("shape"),
+                dot::Id::ident("Mrecord"),
+            ))
+            .add(dot::Attribute::new(
+                dot::Id::ident("style"),
+                dot::Id::ident("rounded"),
+            )),
+    );
+
+    axon
+}
+
+fn render_soma(data: SomaData) -> dot::SubGraph {
+    match data {
+        SomaData::Organelle {
+            uuid,
+            nucleus,
+            somas,
+            name,
+        } => render_organelle(uuid, name, *nucleus, somas),
+        SomaData::Axon {
+            terminals,
+            dendrites,
+            uuid,
+            name,
+        } => render_axon(uuid, name, terminals, dendrites),
+        _ => unimplemented!(),
+    }
+}
+
+fn render_dot(data: SomaData) -> Result<String> {
+    let buf = Vec::new();
+    let mut writer = buf.writer();
+
+    let dot = dot::Dot::DiGraph(dot::SubGraph::new().add(render_soma(data)));
+
+    dot.render(&mut writer)?;
+
+    let viz = String::from_utf8(writer.into_inner())?;
+
+    println!("{}", viz);
+    Ok(viz)
 }

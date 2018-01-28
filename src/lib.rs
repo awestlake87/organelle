@@ -8,6 +8,7 @@ extern crate error_chain;
 #[macro_use]
 extern crate serde_derive;
 
+extern crate bytes;
 extern crate futures_await as futures;
 extern crate serde;
 extern crate serde_json;
@@ -40,6 +41,8 @@ pub use soma::{Impulse, Soma, Synapse};
 error_chain! {
     foreign_links {
         Io(std::io::Error) #[doc = "glue for io::Error"];
+        FromUtf8(std::string::FromUtf8Error)
+            #[doc = "glue for std::string::FromUtf8Error"];
 
         Canceled(futures::Canceled) #[doc = "glue for futures::Canceled"];
         SerdeJson(serde_json::Error) #[doc = "glue for serde_json::Error"];
