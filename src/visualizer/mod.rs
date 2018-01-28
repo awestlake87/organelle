@@ -252,7 +252,7 @@ fn render_organelle(
     uuid: Uuid,
     name: String,
     nucleus: SomaData,
-    somas: Vec<SomaData>,
+    mut somas: Vec<SomaData>,
 ) -> dot::SubGraph {
     let mut organelle = dot::SubGraph::new()
         .id(dot::Id::quoted(format!("cluster_{}", uuid)))
@@ -266,10 +266,11 @@ fn render_organelle(
                     dot::Id::ident("label"),
                     dot::Id::quoted(name),
                 )),
-        )
-        .add(render_soma(nucleus));
+        );
 
     let mut edges = vec![];
+
+    somas.push(nucleus);
 
     for soma in somas {
         match &soma {
