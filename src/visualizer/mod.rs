@@ -319,44 +319,6 @@ fn render_organelle(
                         _ => unimplemented!(),
                     }
                 }
-                for d in dendrites {
-                    match d {
-                        &ConstraintData::One { ref variant, soma } => {
-                            let tgt_uuid = soma;
-
-                            edges.push(dot::NodeId::new(dot::Id::quoted(
-                                src_uuid.to_string(),
-                            )).port(dot::Id::ident(format!("d_{}", variant)))
-                                .connect(
-                                    dot::EdgeOp::Directed,
-                                    dot::NodeId::new(dot::Id::quoted(
-                                        tgt_uuid.to_string(),
-                                    )).port(dot::Id::ident(format!(
-                                        "t_{}",
-                                        variant
-                                    ))),
-                                ));
-                        },
-                        &ConstraintData::Variadic {
-                            ref variant,
-                            ref somas,
-                        } => for tgt_uuid in somas {
-                            edges.push(dot::NodeId::new(dot::Id::quoted(
-                                src_uuid.to_string(),
-                            )).port(dot::Id::ident(format!("d_{}", variant)))
-                                .connect(
-                                    dot::EdgeOp::Directed,
-                                    dot::NodeId::new(dot::Id::quoted(
-                                        tgt_uuid.to_string(),
-                                    )).port(dot::Id::ident(format!(
-                                        "t_{}",
-                                        variant
-                                    ))),
-                                ));
-                        },
-                        _ => unimplemented!(),
-                    }
-                }
             },
             _ => (),
         }
