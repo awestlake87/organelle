@@ -253,6 +253,7 @@ fn render_organelle(
     name: String,
     nucleus: SomaData,
     mut somas: Vec<SomaData>,
+    remap: &HashMap<Uuid, Uuid>,
 ) -> dot::SubGraph {
     let mut organelle = dot::SubGraph::new()
         .id(dot::Id::quoted(format!("cluster_{}", uuid)))
@@ -285,7 +286,12 @@ fn render_organelle(
                 for t in terminals {
                     match t {
                         &ConstraintData::One { ref variant, soma } => {
-                            let tgt_uuid = soma;
+                            let tgt_uuid = if let Some(uuid) = remap.get(&soma)
+                            {
+                                *uuid
+                            } else {
+                                soma
+                            };
 
                             edges.push(dot::NodeId::new(dot::Id::quoted(
                                 src_uuid.to_string(),
@@ -303,7 +309,14 @@ fn render_organelle(
                         &ConstraintData::Variadic {
                             ref variant,
                             ref somas,
-                        } => for tgt_uuid in somas {
+                        } => for uuid in somas {
+                            let tgt_uuid =
+                                if let Some(remapped) = remap.get(&uuid) {
+                                    *remapped
+                                } else {
+                                    *uuid
+                                };
+
                             edges.push(dot::NodeId::new(dot::Id::quoted(
                                 src_uuid.to_string(),
                             )).port(dot::Id::ident(format!("t_{}", variant)))
@@ -323,7 +336,7 @@ fn render_organelle(
             },
             _ => (),
         }
-        organelle = organelle.add(render_soma(soma));
+        organelle = organelle.add(render_soma(soma, remap));
     }
 
     for edge in edges {
@@ -338,6 +351,7 @@ fn render_axon(
     name: String,
     terminals: Vec<ConstraintData>,
     dendrites: Vec<ConstraintData>,
+    remap: &HashMap<Uuid, Uuid>,
 ) -> dot::SubGraph {
     let mut axon = dot::SubGraph::new();
 
@@ -393,21 +407,51 @@ fn render_axon(
     axon
 }
 
-fn render_soma(data: SomaData) -> dot::SubGraph {
+fn render_soma(data: SomaData, remap: &HashMap<Uuid, Uuid>) -> dot::SubGraph {
     match data {
         SomaData::Organelle {
             uuid,
             nucleus,
             somas,
             name,
-        } => render_organelle(uuid, name, *nucleus, somas),
+        } => render_organelle(uuid, name, *nucleus, somas, remap),
         SomaData::Axon {
             terminals,
             dendrites,
             uuid,
             name,
-        } => render_axon(uuid, name, terminals, dendrites),
+        } => render_axon(uuid, name, terminals, dendrites, remap),
         _ => unimplemented!(),
+    }
+}
+
+fn get_uuid(data: &SomaData) -> Option<Uuid> {
+    match data {
+        &SomaData::Organelle {
+            uuid,
+            ref nucleus,
+            ref somas,
+            ..
+        } => get_uuid(nucleus),
+        &SomaData::Axon { uuid, .. } => Some(uuid),
+        _ => None,
+    }
+}
+
+fn remap_uuids(data: &SomaData, remap: &mut HashMap<Uuid, Uuid>) {
+    match data {
+        &SomaData::Organelle {
+            uuid, ref somas, ..
+        } => {
+            if let Some(inner_uuid) = get_uuid(data) {
+                remap.insert(uuid, inner_uuid);
+            }
+
+            for soma in somas {
+                remap_uuids(soma, remap);
+            }
+        },
+        _ => (),
     }
 }
 
@@ -415,13 +459,18 @@ fn render_dot(data: SomaData) -> Result<String> {
     let buf = Vec::new();
     let mut writer = buf.writer();
 
-    let dot =
-        dot::Dot::DiGraph(dot::SubGraph::new().add(render_soma(data)).add(
+    let mut remap = HashMap::new();
+
+    remap_uuids(&data, &mut remap);
+
+    let dot = dot::Dot::DiGraph(
+        dot::SubGraph::new().add(render_soma(data, &remap)).add(
             dot::Attribute::new(
                 dot::Id::ident("rankdir"),
                 dot::Id::ident("LR"),
             ),
-        ));
+        ),
+    );
 
     dot.render(&mut writer)?;
 
