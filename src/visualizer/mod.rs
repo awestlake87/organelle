@@ -441,11 +441,16 @@ fn get_uuid(data: &SomaData) -> Option<Uuid> {
 fn remap_uuids(data: &SomaData, remap: &mut HashMap<Uuid, Uuid>) {
     match data {
         &SomaData::Organelle {
-            uuid, ref somas, ..
+            uuid,
+            ref nucleus,
+            ref somas,
+            ..
         } => {
             if let Some(inner_uuid) = get_uuid(data) {
                 remap.insert(uuid, inner_uuid);
             }
+
+            remap_uuids(nucleus, remap);
 
             for soma in somas {
                 remap_uuids(soma, remap);
@@ -462,6 +467,8 @@ fn render_dot(data: SomaData) -> Result<String> {
     let mut remap = HashMap::new();
 
     remap_uuids(&data, &mut remap);
+
+    println!("{:#?}", remap);
 
     let dot = dot::Dot::DiGraph(
         dot::SubGraph::new().add(render_soma(data, &remap)).add(
