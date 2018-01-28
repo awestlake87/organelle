@@ -102,17 +102,19 @@ pub struct Dendrite {
     rx: mpsc::Receiver<Request>,
 }
 
+pub fn synapse() -> (Terminal, Dendrite) {
+    let (tx, rx) = mpsc::channel(10);
+
+    (Terminal { tx: tx }, Dendrite { rx: rx })
+}
+
 impl soma::Synapse for Synapse {
     type Terminal = Terminal;
     type Dendrite = Dendrite;
 
     fn synapse(self) -> (Terminal, Dendrite) {
         match self {
-            Synapse::Probe => {
-                let (tx, rx) = mpsc::channel(10);
-
-                (Terminal { tx: tx }, Dendrite { rx: rx })
-            },
+            Synapse::Probe => synapse(),
         }
     }
 }
