@@ -376,8 +376,8 @@ fn render_axon(
                 dot::Id::quoted(format!(
                     "<name> {} | {{ {{ {} }} | {{ }} | {{ {} }} }} | {{ }}",
                     name.replace("<", "\\<").replace(">", "\\>"),
-                    terminals,
                     dendrites,
+                    terminals,
                 )),
             ))
             .add(dot::Attribute::new(
