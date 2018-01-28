@@ -155,7 +155,7 @@ impl VisualizerService {
 
     fn get(&self, req: hyper::Request) -> <Self as Service>::Future {
         match req.path() {
-            "/index.html" => {
+            "/" | "/index.html" => {
                 let mut rsp = hyper::Response::new();
 
                 rsp.set_body(include_str!("index.html"));
