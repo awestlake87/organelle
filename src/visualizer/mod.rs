@@ -98,7 +98,7 @@ impl VisualizerTask {
         Self {
             probe: probe,
             port: 8080,
-            open_on_start: true,
+            open_on_start: false,
 
             main_tx: main_tx,
             handle: handle,
