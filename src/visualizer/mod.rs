@@ -10,7 +10,6 @@ use futures::prelude::*;
 use futures::unsync::mpsc;
 use hyper::{self, header};
 use hyper::server::{Http, Service};
-use hyper_staticfile::Static;
 use open;
 use serde_json;
 use tokio_core::reactor;
@@ -146,24 +145,33 @@ impl VisualizerTask {
 }
 
 struct VisualizerService {
-    ui: Static,
     probe: Terminal,
 }
 
 impl VisualizerService {
     fn new(handle: &reactor::Handle, probe: Terminal) -> Self {
-        Self {
-            ui: Static::new(handle, "src/visualizer"),
-            probe: probe,
-        }
+        Self { probe: probe }
     }
 
     fn get(&self, req: hyper::Request) -> <Self as Service>::Future {
         match req.path() {
-            "/api/probe/json" | "/api/probe/dot" => Box::new(
+            "/index.html" => {
+                let mut rsp = hyper::Response::new();
+
+                rsp.set_body(include_str!("index.html"));
+
+                Box::new(future::ok(rsp))
+            },
+            "/viz-lite.js" => {
+                let mut rsp = hyper::Response::new();
+
+                rsp.set_body(include_str!("viz-lite.js"));
+
+                Box::new(future::ok(rsp))
+            },
+            _ => Box::new(
                 Self::get_api(req, self.probe.clone()).map_err(|e| e.into()),
             ),
-            _ => Box::new(self.ui.call(req)),
         }
     }
 
@@ -261,8 +269,102 @@ fn render_organelle(
         )
         .add(render_soma(nucleus));
 
+    let mut edges = vec![];
+
     for soma in somas {
+        match &soma {
+            &SomaData::Axon {
+                uuid,
+                ref terminals,
+                ref dendrites,
+                ..
+            } => {
+                let src_uuid = uuid;
+
+                for t in terminals {
+                    match t {
+                        &ConstraintData::One { ref variant, soma } => {
+                            let tgt_uuid = soma;
+
+                            edges.push(dot::NodeId::new(dot::Id::quoted(
+                                src_uuid.to_string(),
+                            )).port(dot::Id::ident(format!("t_{}", variant)))
+                                .connect(
+                                    dot::EdgeOp::Directed,
+                                    dot::NodeId::new(dot::Id::quoted(
+                                        tgt_uuid.to_string(),
+                                    )).port(dot::Id::ident(format!(
+                                        "d_{}",
+                                        variant
+                                    ))),
+                                ));
+                        },
+                        &ConstraintData::Variadic {
+                            ref variant,
+                            ref somas,
+                        } => for tgt_uuid in somas {
+                            edges.push(dot::NodeId::new(dot::Id::quoted(
+                                src_uuid.to_string(),
+                            )).port(dot::Id::ident(format!("t_{}", variant)))
+                                .connect(
+                                    dot::EdgeOp::Directed,
+                                    dot::NodeId::new(dot::Id::quoted(
+                                        tgt_uuid.to_string(),
+                                    )).port(dot::Id::ident(format!(
+                                        "d_{}",
+                                        variant
+                                    ))),
+                                ));
+                        },
+                        _ => unimplemented!(),
+                    }
+                }
+                for d in dendrites {
+                    match d {
+                        &ConstraintData::One { ref variant, soma } => {
+                            let tgt_uuid = soma;
+
+                            edges.push(dot::NodeId::new(dot::Id::quoted(
+                                src_uuid.to_string(),
+                            )).port(dot::Id::ident(format!("d_{}", variant)))
+                                .connect(
+                                    dot::EdgeOp::Directed,
+                                    dot::NodeId::new(dot::Id::quoted(
+                                        tgt_uuid.to_string(),
+                                    )).port(dot::Id::ident(format!(
+                                        "t_{}",
+                                        variant
+                                    ))),
+                                ));
+                        },
+                        &ConstraintData::Variadic {
+                            ref variant,
+                            ref somas,
+                        } => for tgt_uuid in somas {
+                            edges.push(dot::NodeId::new(dot::Id::quoted(
+                                src_uuid.to_string(),
+                            )).port(dot::Id::ident(format!("d_{}", variant)))
+                                .connect(
+                                    dot::EdgeOp::Directed,
+                                    dot::NodeId::new(dot::Id::quoted(
+                                        tgt_uuid.to_string(),
+                                    )).port(dot::Id::ident(format!(
+                                        "t_{}",
+                                        variant
+                                    ))),
+                                ));
+                        },
+                        _ => unimplemented!(),
+                    }
+                }
+            },
+            _ => (),
+        }
         organelle = organelle.add(render_soma(soma));
+    }
+
+    for edge in edges {
+        organelle = organelle.add(edge);
     }
 
     organelle
@@ -304,14 +406,12 @@ fn render_axon(
 
     let dendrites = dendrites.join(" | ");
 
-    println!("{}, {}", terminals, dendrites);
-
     axon = axon.add(
         dot::Node::new(dot::Id::quoted(uuid.to_string()))
             .add(dot::Attribute::new(
                 dot::Id::ident("label"),
                 dot::Id::quoted(format!(
-                    "<name> {} | {{ {} }} | {{ {} }}",
+                    "<name> {} | {{ {{ {} }} | {{ }} | {{ {} }} }} | {{ }}",
                     name.replace("<", "\\<").replace(">", "\\>"),
                     terminals,
                     dendrites,
@@ -352,12 +452,17 @@ fn render_dot(data: SomaData) -> Result<String> {
     let buf = Vec::new();
     let mut writer = buf.writer();
 
-    let dot = dot::Dot::DiGraph(dot::SubGraph::new().add(render_soma(data)));
+    let dot =
+        dot::Dot::DiGraph(dot::SubGraph::new().add(render_soma(data)).add(
+            dot::Attribute::new(
+                dot::Id::ident("rankdir"),
+                dot::Id::ident("LR"),
+            ),
+        ));
 
     dot.render(&mut writer)?;
 
     let viz = String::from_utf8(writer.into_inner())?;
 
-    println!("{}", viz);
     Ok(viz)
 }

@@ -19,8 +19,6 @@ extern crate uuid;
 #[cfg(feature = "visualizer")]
 extern crate hyper;
 #[cfg(feature = "visualizer")]
-extern crate hyper_staticfile;
-#[cfg(feature = "visualizer")]
 extern crate open;
 
 mod axon;

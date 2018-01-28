@@ -142,7 +142,30 @@ impl NodeId {
     }
 
     fn write(&self, writer: &mut Write) -> io::Result<()> {
-        write!(writer, "{}", self.id)
+        write!(writer, "{}", self.id)?;
+
+        if let Some(ref port) = self.port {
+            write!(writer, ":{}", port)?;
+        }
+
+        if let Some(compass) = self.compass {
+            write!(
+                writer,
+                ":{}",
+                match compass {
+                    Compass::North => "n",
+                    Compass::NorthEast => "ne",
+                    Compass::East => "e",
+                    Compass::SouthEast => "se",
+                    Compass::South => "s",
+                    Compass::SouthWest => "sw",
+                    Compass::West => "w",
+                    Compass::NorthWest => "nw",
+                }
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -246,6 +269,8 @@ impl SubGraph {
     }
 
     fn write(&self, writer: &mut Write, indents: u32) -> io::Result<()> {
+        write_indents(writer, indents)?;
+
         if self.strict {
             write!(writer, "strict ")?;
         }
