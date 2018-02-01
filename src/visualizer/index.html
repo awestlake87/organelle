@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+
+    <script src="/viz-lite.js"></script>
+    <script>
+
+        function get(url) {
+            var http = new XMLHttpRequest();
+
+            http.open("GET", url, false);
+            http.send(null)
+
+            return http.responseText
+        }
+
+    </script>
+</head>
+
+<body>
+    <script>
+        var probe_json = get("/api/probe/json");
+        console.log(JSON.parse(probe_json));
+
+        var probe_dot = get("/api/probe/dot");
+        console.log(probe_dot);
+        var image = Viz(probe_dot, { format: "png-image-element" });
+        document.body.appendChild(image);
+    </script>
+</body>
+
+</html>

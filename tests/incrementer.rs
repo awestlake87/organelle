@@ -177,6 +177,7 @@ impl Soma for Incrementer {
     fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddTerminal(
+                _,
                 IncrementerSynapse::Increment,
                 IncrementerTerminal::Incrementer(tx),
             ) => {
@@ -187,7 +188,7 @@ impl Soma for Incrementer {
                     tx: Some(tx),
                 })
             },
-            Impulse::Start(tx, handle) => {
+            Impulse::Start(_, tx, handle) => {
                 let sender = self.tx.as_ref().unwrap().clone();
                 let timer = mem::replace(&mut self.timer, None).unwrap();
 
@@ -225,6 +226,7 @@ impl Soma for Counter {
     fn update(mut self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddDendrite(
+                _,
                 CounterSynapse::Increment,
                 CounterDendrite::Counter(rx),
             ) => {
@@ -232,7 +234,7 @@ impl Soma for Counter {
 
                 Ok(Self { rx: Some(rx) })
             },
-            Impulse::Start(tx, handle) => {
+            Impulse::Start(_, tx, handle) => {
                 let stopper = tx.clone();
                 let rx = mem::replace(&mut self.rx, None).unwrap();
 

@@ -64,10 +64,11 @@ impl Soma for GiverSoma {
     fn update(self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddTerminal(
+                _,
                 Synapse::GiveSomething,
                 Terminal::Giver(tx),
             ) => Ok(Self { tx: Some(tx) }),
-            Impulse::Start(_, _) => {
+            Impulse::Start(_, _, _) => {
                 await!(
                     self.tx
                         .unwrap()
@@ -104,10 +105,11 @@ impl Soma for TakerSoma {
     fn update(self, imp: Impulse<Self::Synapse>) -> Result<Self> {
         match imp {
             Impulse::AddDendrite(
+                _,
                 Synapse::GiveSomething,
                 Dendrite::Taker(rx),
             ) => Ok(Self { rx: Some(rx) }),
-            Impulse::Start(tx, _) => {
+            Impulse::Start(_, tx, _) => {
                 await!(
                     self.rx
                         .unwrap()

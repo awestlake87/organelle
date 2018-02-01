@@ -1,43 +1,52 @@
 use std;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::intrinsics;
 
 use futures::prelude::*;
-use futures::unsync;
+use futures::unsync::{mpsc, oneshot};
 use tokio_core::reactor;
+use uuid::Uuid;
 
 use super::{Error, Result};
+use probe::{self, SomaData, SynapseData};
 
 /// trait alias to express requirements of a Synapse type
 pub trait Synapse: Debug + Copy + Clone + Hash + PartialEq + Eq {
     /// terminals are the senders or outputs in a connection between somas
-    type Terminal;
+    type Terminal: Debug;
     /// dendrites are the receivers or inputs in a connection between somas
-    type Dendrite;
+    type Dendrite: Debug;
+
+    /// get the data associated with the synapse
+    fn data() -> SynapseData {
+        SynapseData(unsafe { intrinsics::type_name::<Self>().to_string() })
+    }
 
     /// form a synapse for this synapse into a terminal and dendrite
     fn synapse(self) -> (Self::Terminal, Self::Dendrite);
 }
 
 /// a group of control signals passed between somas
+#[derive(Debug)]
 pub enum Impulse<R: Synapse> {
     /// add a dendrite for input to the soma
     ///
     /// you should always expect to handle this impulse if the soma has any
     /// inputs. if your soma has inputs, it is best to wrap it with an Axon
     /// which can be used for validation purposes.
-    AddDendrite(R, R::Dendrite),
+    AddDendrite(Uuid, R, R::Dendrite),
     /// add a terminal for output to the soma
     ///
     /// you should always expect to handle this impulse if the soma has any
     /// outputs. if your soma has outputs, it is best to wrap it with an Axon
     /// which can be used for validation purposes.
-    AddTerminal(R, R::Terminal),
+    AddTerminal(Uuid, R, R::Terminal),
     /// notify the soma that it has received all of its inputs and outputs
     ///
     /// you should always expect to handle this impulse because it will be
     /// passed to each soma regardless of configuration
-    Start(unsync::mpsc::Sender<Impulse<R>>, reactor::Handle),
+    Start(Uuid, mpsc::Sender<Impulse<R>>, reactor::Handle),
     /// stop the event loop and exit gracefully
     ///
     /// you should not expect to handle this impulse at any time, it is handled
@@ -51,6 +60,8 @@ pub enum Impulse<R: Synapse> {
     /// you should not expect to handle this impulse at any time, it is handled
     /// for you by the event loop
     Error(Error),
+    /// send a probe throughout the organelle
+    Probe(probe::Settings, oneshot::Sender<SomaData>),
 }
 
 impl<R> Impulse<R>
@@ -65,16 +76,20 @@ where
         T::Terminal: Into<R::Terminal>,
     {
         match imp {
-            Impulse::AddDendrite(synapse, dendrite) => {
-                Impulse::AddDendrite(synapse.into(), dendrite.into())
+            Impulse::AddDendrite(uuid, synapse, dendrite) => {
+                Impulse::AddDendrite(uuid, synapse.into(), dendrite.into())
             },
-            Impulse::AddTerminal(synapse, terminal) => {
-                Impulse::AddTerminal(synapse.into(), terminal.into())
+            Impulse::AddTerminal(uuid, synapse, terminal) => {
+                Impulse::AddTerminal(uuid, synapse.into(), terminal.into())
             },
             Impulse::Stop => Impulse::Stop,
             Impulse::Error(e) => Impulse::Error(e),
 
-            Impulse::Start(_, _) => panic!("no automatic conversion for start"),
+            Impulse::Start(_, _, _) => {
+                panic!("no automatic conversion for start")
+            },
+
+            Impulse::Probe(settings, tx) => Impulse::Probe(settings, tx),
         }
     }
 }
@@ -92,6 +107,24 @@ pub trait Soma: Sized {
     /// the types of errors that this soma can return
     type Error: std::error::Error + Send + Into<Error>;
 
+    /// probe the internal structure of this soma
+    #[async(boxed)]
+    fn probe(
+        self,
+        _settings: probe::Settings,
+    ) -> std::result::Result<(Self, SomaData), Self::Error>
+    where
+        Self: 'static,
+    {
+        Ok((
+            self,
+            SomaData::Soma {
+                synapse: Self::Synapse::data(),
+                name: unsafe { intrinsics::type_name::<Self>().to_string() },
+            },
+        ))
+    }
+
     /// react to a single impulse
     fn update(
         self,
@@ -105,11 +138,13 @@ pub trait Soma: Sized {
         Self: 'static,
     {
         // it's important that tx live through this function
-        let (tx, rx) = unsync::mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(1);
+
+        let uuid = Uuid::new_v4();
 
         await!(
             tx.clone()
-                .send(Impulse::Start(tx, handle))
+                .send(Impulse::Start(uuid, tx, handle))
                 .map_err(|_| Error::from("unable to send start signal"))
         )?;
 

@@ -5,24 +5,56 @@
 
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate serde_derive;
 
+extern crate bytes;
 extern crate futures_await as futures;
+extern crate serde;
+extern crate serde_json;
 extern crate tokio;
 extern crate tokio_core;
 extern crate uuid;
+
+#[cfg(feature = "visualizer")]
+extern crate hyper;
+#[cfg(feature = "visualizer")]
+extern crate open;
 
 mod axon;
 mod organelle;
 mod soma;
 
+/// visualization soma used to visualize the results of a probe
+#[cfg(feature = "visualizer")]
+pub mod visualizer;
+
+/// probe soma used to inspect the internal structure of an organelle
+pub mod probe;
+
 pub use axon::{Axon, Constraint};
 pub use organelle::Organelle;
+pub use probe::{ConstraintData, SomaData};
 pub use soma::{Impulse, Soma, Synapse};
+
 /// organelle error
 error_chain! {
     foreign_links {
         Io(std::io::Error) #[doc = "glue for io::Error"];
+        FromUtf8(std::string::FromUtf8Error)
+            #[doc = "glue for std::string::FromUtf8Error"];
+
         Canceled(futures::Canceled) #[doc = "glue for futures::Canceled"];
+        SerdeJson(serde_json::Error) #[doc = "glue for serde_json::Error"];
+
+
+        Hyper(hyper::Error)
+            #[cfg(feature = "visualizer")]
+            #[doc = "glue for hyper::Error"];
+
+        AddrParse(std::net::AddrParseError)
+            #[cfg(feature = "visualizer")]
+            #[doc = "glue for net::AddrParseError"];
     }
     errors {
         /// a soma returned an error when called into
@@ -42,5 +74,15 @@ error_chain! {
             description("missing synapse"),
             display("invalid synapse - {}", msg)
         }
+    }
+}
+
+#[cfg(feature = "visualizer")]
+impl From<Error> for hyper::Error {
+    fn from(e: Error) -> Self {
+        hyper::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("{:?}", e),
+        ))
     }
 }
