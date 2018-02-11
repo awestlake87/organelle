@@ -153,12 +153,19 @@ impl<T: Soma + 'static> Organelle<T> {
     ) -> Result<()> {
         let (tx, rx) = synapse.synapse();
 
-        let dendrite_sender = if let Some(sender) = self.somas.get(&dendrite) {
-            sender.clone()
-        } else {
-            bail!("unable to find dendrite")
-        };
+        self.add_terminal((terminal, tx), dendrite, synapse)?;
+        self.add_dendrite((dendrite, rx), terminal, synapse)?;
 
+        Ok(())
+    }
+
+    /// send a dendrite to the specified soma
+    pub fn add_dendrite(
+        &self,
+        dendrite: (Uuid, <T::Synapse as Synapse>::Dendrite),
+        terminal: Uuid,
+        synapse: T::Synapse,
+    ) -> Result<()> {
         let terminal_sender = if let Some(sender) = self.somas.get(&terminal) {
             sender.clone()
         } else {
@@ -166,19 +173,36 @@ impl<T: Soma + 'static> Organelle<T> {
         };
 
         self.handle.spawn(
-            dendrite_sender
-                .send(Impulse::AddTerminal(terminal, synapse, tx))
-                .map(|_| ())
-                .map_err(|_| {
-                    eprintln!("unable to add terminal");
-                }),
-        );
-        self.handle.spawn(
             terminal_sender
-                .send(Impulse::AddDendrite(dendrite, synapse, rx))
+                .send(Impulse::AddDendrite(dendrite.0, synapse, dendrite.1))
                 .map(|_| ())
                 .map_err(|_| {
                     eprintln!("unable to add dendrite");
+                }),
+        );
+
+        Ok(())
+    }
+
+    /// send a terminal to the specified soma
+    pub fn add_terminal(
+        &self,
+        terminal: (Uuid, <T::Synapse as Synapse>::Terminal),
+        dendrite: Uuid,
+        synapse: T::Synapse,
+    ) -> Result<()> {
+        let dendrite_sender = if let Some(sender) = self.somas.get(&dendrite) {
+            sender.clone()
+        } else {
+            bail!("unable to find dendrite")
+        };
+
+        self.handle.spawn(
+            dendrite_sender
+                .send(Impulse::AddTerminal(terminal.0, synapse, terminal.1))
+                .map(|_| ())
+                .map_err(|_| {
+                    eprintln!("unable to add terminal");
                 }),
         );
 

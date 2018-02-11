@@ -248,7 +248,7 @@ impl Soma for Counter {
 
                                 println!("counter {}...", i);
 
-                                Ok((i < 5))
+                                Ok(i < 5)
                             }).for_each(|_| Ok(()))
                                 .and_then(|_| Ok(()))
                                 .or_else(|_| Err(Error::from(

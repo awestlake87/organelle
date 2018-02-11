@@ -1,6 +1,6 @@
 [package]
 name = "organelle"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Andrew J Westlake <kelixes@gmail.com>"]
 description = "framework for creating emergent AI systems"
 license = "MIT"
