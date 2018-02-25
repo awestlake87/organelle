@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `Impulse` enum in crate `organelle`.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, Impulse">
+
+    <title>organelle::Impulse - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css" id="mainThemeStyle">
+    
+    <link rel="stylesheet" type="text/css" href="../dark.css">
+    <link rel="stylesheet" type="text/css" href="../main.css" id="themeStyle">
+    <script src="../storage.js"></script>
+    
+
+    
+    
+</head>
+<body class="rustdoc enum">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        <div class="sidebar-menu">&#9776;</div>
+        
+        <p class='location'>Enum Impulse</p><div class="sidebar-elems"><div class="block items"><a class="sidebar-title" href="#variants">Variants</a><div class="sidebar-links"><a href="#variant.AddDendrite">AddDendrite</a><a href="#variant.AddTerminal">AddTerminal</a><a href="#variant.Start">Start</a><a href="#variant.Stop">Stop</a><a href="#variant.Error">Error</a><a href="#variant.Probe">Probe</a></div><a class="sidebar-title" href="#methods">Methods</a><div class="sidebar-links"><a href="#method.convert_from">convert_from</a></div><a class="sidebar-title" href="#implementations">Trait Implementations</a><div class="sidebar-links"><a href="#impl-Debug">Debug</a></div><a class="sidebar-title" href="#synthetic-implementations">Auto Trait Implementations</a><div class="sidebar-links"><a href="#impl-Send">!Send</a><a href="#impl-Sync">!Sync</a></div></div><p class='location'><a href='index.html'>organelle</a></p><script>window.sidebarCurrent = {name: 'Impulse', ty: 'enum', relpath: ''};</script><script defer src="sidebar-items.js"></script></div>
+    </nav>
+
+    <div class="theme-picker">
+        <button id="theme-picker" aria-label="Pick another theme!">
+            <img src="../brush.svg" width="18" alt="Pick another theme!">
+        </button>
+        <div id="theme-choices"></div>
+    </div>
+    <script src="../theme.js"></script>
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Enum <a href='index.html'>organelle</a>::<wbr><a class="enum" href=''>Impulse</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/organelle/soma.rs.html#32-65' title='goto source code'>[src]</a></span></h1>
+<pre class='rust enum'>pub enum Impulse&lt;R:&nbsp;<a class="trait" href="../organelle/trait.Synapse.html" title="trait organelle::Synapse">Synapse</a>&gt; {
+    AddDendrite(<a class="struct" href="https://docs.rs/uuid/uuid/struct.Uuid.html" title="struct uuid::Uuid">Uuid</a>,&nbsp;R,&nbsp;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Dendrite" title="type organelle::Synapse::Dendrite">Dendrite</a>),
+    AddTerminal(<a class="struct" href="https://docs.rs/uuid/uuid/struct.Uuid.html" title="struct uuid::Uuid">Uuid</a>,&nbsp;R,&nbsp;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Terminal" title="type organelle::Synapse::Terminal">Terminal</a>),
+    Start(<a class="struct" href="https://docs.rs/uuid/uuid/struct.Uuid.html" title="struct uuid::Uuid">Uuid</a>,&nbsp;<a class="struct" href="https://docs.rs/futures/0.1/futures/unsync/mpsc/struct.Sender.html" title="struct futures::unsync::mpsc::Sender">Sender</a>&lt;<a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;R&gt;&gt;,&nbsp;<a class="struct" href="https://docs.rs/tokio-core/0.1/tokio_core/reactor/struct.Handle.html" title="struct tokio_core::reactor::Handle">Handle</a>),
+    Stop,
+    Error(<a class="struct" href="../organelle/struct.Error.html" title="struct organelle::Error">Error</a>),
+    Probe(<a class="struct" href="../organelle/probe/struct.Settings.html" title="struct organelle::probe::Settings">Settings</a>,&nbsp;<a class="struct" href="https://docs.rs/futures/0.1/futures/unsync/oneshot/struct.Sender.html" title="struct futures::unsync::oneshot::Sender">Sender</a>&lt;<a class="enum" href="../organelle/probe/enum.SomaData.html" title="enum organelle::probe::SomaData">SomaData</a>&gt;),
+}</pre><div class='docblock'><p>a group of control signals passed between somas</p>
+</div><h2 id='variants' class='variants small-section-header'>
+                   Variants<a href='#variants' class='anchor'></a></h2>
+<span id="variant.AddDendrite" class="variant small-section-header"><a href="#variant.AddDendrite" class="anchor field"></a><span id='AddDendrite.v' class='invisible'><code>AddDendrite(<a class="struct" href="https://docs.rs/uuid/uuid/struct.Uuid.html" title="struct uuid::Uuid">Uuid</a>,&nbsp;R,&nbsp;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Dendrite" title="type organelle::Synapse::Dendrite">Dendrite</a>)</code></span></span><div class='docblock'><p>add a dendrite for input to the soma</p>
+<p>you should always expect to handle this impulse if the soma has any
+inputs. if your soma has inputs, it is best to wrap it with an Axon
+which can be used for validation purposes.</p>
+</div><span id="variant.AddTerminal" class="variant small-section-header"><a href="#variant.AddTerminal" class="anchor field"></a><span id='AddTerminal.v' class='invisible'><code>AddTerminal(<a class="struct" href="https://docs.rs/uuid/uuid/struct.Uuid.html" title="struct uuid::Uuid">Uuid</a>,&nbsp;R,&nbsp;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Terminal" title="type organelle::Synapse::Terminal">Terminal</a>)</code></span></span><div class='docblock'><p>add a terminal for output to the soma</p>
+<p>you should always expect to handle this impulse if the soma has any
+outputs. if your soma has outputs, it is best to wrap it with an Axon
+which can be used for validation purposes.</p>
+</div><span id="variant.Start" class="variant small-section-header"><a href="#variant.Start" class="anchor field"></a><span id='Start.v' class='invisible'><code>Start(<a class="struct" href="https://docs.rs/uuid/uuid/struct.Uuid.html" title="struct uuid::Uuid">Uuid</a>,&nbsp;<a class="struct" href="https://docs.rs/futures/0.1/futures/unsync/mpsc/struct.Sender.html" title="struct futures::unsync::mpsc::Sender">Sender</a>&lt;<a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;R&gt;&gt;,&nbsp;<a class="struct" href="https://docs.rs/tokio-core/0.1/tokio_core/reactor/struct.Handle.html" title="struct tokio_core::reactor::Handle">Handle</a>)</code></span></span><div class='docblock'><p>notify the soma that it has received all of its inputs and outputs</p>
+<p>you should always expect to handle this impulse because it will be
+passed to each soma regardless of configuration</p>
+</div><span id="variant.Stop" class="variant small-section-header"><a href="#variant.Stop" class="anchor field"></a><span id='Stop.v' class='invisible'><code>Stop</code></span></span><div class='docblock'><p>stop the event loop and exit gracefully</p>
+<p>you should not expect to handle this impulse at any time, it is handled
+for you by the event loop</p>
+</div><span id="variant.Error" class="variant small-section-header"><a href="#variant.Error" class="anchor field"></a><span id='Error.v' class='invisible'><code>Error(<a class="struct" href="../organelle/struct.Error.html" title="struct organelle::Error">Error</a>)</code></span></span><div class='docblock'><p>terminate the event loop with an error</p>
+<p>this impulse will automatically be triggered if a soma update resolves
+with an error.</p>
+<p>you should not expect to handle this impulse at any time, it is handled
+for you by the event loop</p>
+</div><span id="variant.Probe" class="variant small-section-header"><a href="#variant.Probe" class="anchor field"></a><span id='Probe.v' class='invisible'><code>Probe(<a class="struct" href="../organelle/probe/struct.Settings.html" title="struct organelle::probe::Settings">Settings</a>,&nbsp;<a class="struct" href="https://docs.rs/futures/0.1/futures/unsync/oneshot/struct.Sender.html" title="struct futures::unsync::oneshot::Sender">Sender</a>&lt;<a class="enum" href="../organelle/probe/enum.SomaData.html" title="enum organelle::probe::SomaData">SomaData</a>&gt;)</code></span></span><div class='docblock'><p>send a probe throughout the organelle</p>
+</div>
+                    <h2 id='methods' class='small-section-header'>
+                      Methods<a href='#methods' class='anchor'></a>
+                    </h2>
+                <h3 id='impl' class='impl'><span class='in-band'><code>impl&lt;R&gt; <a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;R&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;R: <a class="trait" href="../organelle/trait.Synapse.html" title="trait organelle::Synapse">Synapse</a>,&nbsp;</span></code><a href='#impl' class='anchor'></a></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/organelle/soma.rs.html#67-95' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.convert_from' class="method"><span id='convert_from.v' class='invisible'><code>pub fn <a href='#method.convert_from' class='fnname'>convert_from</a>&lt;T&gt;(imp: <a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;T&gt;) -&gt; Self <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: <a class="trait" href="../organelle/trait.Synapse.html" title="trait organelle::Synapse">Synapse</a> + <a class="trait" href="https://doc.rust-lang.org/nightly/core/convert/trait.Into.html" title="trait core::convert::Into">Into</a>&lt;R&gt;,<br>&nbsp;&nbsp;&nbsp;&nbsp;T::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Dendrite" title="type organelle::Synapse::Dendrite">Dendrite</a>: <a class="trait" href="https://doc.rust-lang.org/nightly/core/convert/trait.Into.html" title="trait core::convert::Into">Into</a>&lt;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Dendrite" title="type organelle::Synapse::Dendrite">Dendrite</a>&gt;,<br>&nbsp;&nbsp;&nbsp;&nbsp;T::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Terminal" title="type organelle::Synapse::Terminal">Terminal</a>: <a class="trait" href="https://doc.rust-lang.org/nightly/core/convert/trait.Into.html" title="trait core::convert::Into">Into</a>&lt;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Terminal" title="type organelle::Synapse::Terminal">Terminal</a>&gt;,&nbsp;</span></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/organelle/soma.rs.html#72-94' title='goto source code'>[src]</a></span></h4>
+<div class='docblock'><p>convert from another type of impulse</p>
+</div></div>
+            <h2 id='implementations' class='small-section-header'>
+              Trait Implementations<a href='#implementations' class='anchor'></a>
+            </h2>
+            <div id='implementations-list'>
+        <h3 id='impl-Debug' class='impl'><span class='in-band'><code>impl&lt;R:&nbsp;<a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a> + <a class="trait" href="../organelle/trait.Synapse.html" title="trait organelle::Synapse">Synapse</a>&gt; <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a> for <a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;R&gt; <span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Dendrite" title="type organelle::Synapse::Dendrite">Dendrite</a>: <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a>,<br>&nbsp;&nbsp;&nbsp;&nbsp;R::<a class="type" href="../organelle/trait.Synapse.html#associatedtype.Terminal" title="type organelle::Synapse::Terminal">Terminal</a>: <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a>,&nbsp;</span></code><a href='#impl-Debug' class='anchor'></a></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/organelle/soma.rs.html#31' title='goto source code'>[src]</a></span></h3>
+<div class='impl-items'><h4 id='method.fmt' class="method"><span id='fmt.v' class='invisible'><code>fn <a href='https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html#tymethod.fmt' class='fnname'>fmt</a>(&amp;self, __arg_0: &amp;mut <a class="struct" href="https://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html" title="struct core::fmt::Formatter">Formatter</a>) -&gt; <a class="type" href="https://doc.rust-lang.org/nightly/core/fmt/type.Result.html" title="type core::fmt::Result">Result</a></code></span><span class='out-of-band'><div class='ghost'></div><a class='srclink' href='../src/organelle/soma.rs.html#31' title='goto source code'>[src]</a></span></h4>
+<div class='docblock'><p>Formats the value using the given formatter. <a href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html#tymethod.fmt">Read more</a></p>
+</div></div></div>
+            <h2 id='synthetic-implementations' class='small-section-header'>
+              Auto Trait Implementations<a href='#synthetic-implementations' class='anchor'></a>
+            </h2>
+            <div id='synthetic-implementations-list'>
+        <h3 id='impl-Send' class='impl'><span class='in-band'><code>impl&lt;R&gt; !<a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> for <a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;R&gt;</code><a href='#impl-Send' class='anchor'></a></span><span class='out-of-band'></span></h3>
+<div class='impl-items'></div><h3 id='impl-Sync' class='impl'><span class='in-band'><code>impl&lt;R&gt; !<a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> for <a class="enum" href="../organelle/enum.Impulse.html" title="enum organelle::Impulse">Impulse</a>&lt;R&gt;</code><a href='#impl-Sync' class='anchor'></a></span><span class='out-of-band'></span></h3>
+<div class='impl-items'></div></div></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt><kbd>?</kbd></dt>
+                    <dd>Show this help dialog</dd>
+                    <dt><kbd>S</kbd></dt>
+                    <dd>Focus the search field</dd>
+                    <dt><kbd>↑</kbd></dt>
+                    <dd>Move up in search results</dd>
+                    <dt><kbd>↓</kbd></dt>
+                    <dd>Move down in search results</dd>
+                    <dt><kbd>↹</kbd></dt>
+                    <dd>Switch tab</dd>
+                    <dt><kbd>&#9166;</kbd></dt>
+                    <dd>Go to active search result</dd>
+                    <dt><kbd>+</kbd></dt>
+                    <dd>Expand all sections</dd>
+                    <dt><kbd>-</kbd></dt>
+                    <dd>Collapse all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "organelle";
+    </script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>
